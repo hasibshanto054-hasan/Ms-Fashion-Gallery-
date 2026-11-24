@@ -387,7 +387,7 @@ function cloudCard(){
 }
 
 const P=id=>D.products.find(p=>p.id===id);
-const byCode=c=>{c=String(c).trim();return D.products.find(p=>p.code===c||(p.units||[]).some(u=>u.bc===c))};
+const byCode=c=>{c=String(c).trim();return D.products.find(p=>p.code===c||(p.units||[]).some(u=>u.bc===c)||Object.values(((D.st&&D.st.bbc)||{})[p.id]||{}).includes(c))};
 const unitOf=(p,c)=>(p.units||[]).find(u=>u.bc===String(c).trim())||null;
 const find=q=>{q=String(q||'').trim();if(!q)return null;return byCode(q)||D.products.find(p=>p.name.toLowerCase().includes(q.toLowerCase()))||null};
 const sum=(a,f)=>a.reduce((x,y)=>x+f(y),0);
@@ -725,7 +725,8 @@ function migrate(){
   d.set=d.set||{};if(d.set.vat===undefined)d.set.vat='98765432198765';if(d.set.autoCancelH===undefined)d.set.autoCancelH=24;
   d.purchases.forEach(x=>{if(typeof x.vat==='string'){x.vno=x.vat;x.vat=r2((x.items||[]).reduce((a,i)=>a+(+i.vat||0),0))}});
   d.jseq=d.jseq||0;d.pseq=d.pseq||0;
-  d.st=Object.assign({seq:{},closed:[],docs:[],xf:[],po:[],cats:[],bprice:{},plog:[],reps:[],targets:{},eod:[],open:{status:'draft',lines:{}},sheets:[]},d.st||{});
+  d.st=Object.assign({seq:{},closed:[],docs:[],xf:[],po:[],cats:[],bprice:{},bbc:{},plog:[],reps:[],targets:{},eod:[],open:{status:'draft',lines:{}},sheets:[]},d.st||{});
+  if(!d.st.br5&&d.cfg&&d.cfg.cc){d.st.br5=1;['Branch 1','Branch 2','Branch 3','Branch 4','Branch 5'].forEach(n=>{if(!d.cfg.cc.includes(n))d.cfg.cc.push(n)})}
   d.nseq=Object.assign({dn:0,cn:0},d.nseq||{});d.vseq=Object.assign({rv:0,pv:0,rrv:0,rpv:0},d.vseq||{});
   d.products.forEach(p=>{if(!p.tax)p.tax=d.cfg.defTax;if(p.sub===undefined)p.sub=SUBMAP[p.name]||''});
   if(d.migrated)return;
@@ -1411,11 +1412,23 @@ function bcBars(code,hgt,m,fs){fs=fs||10;
   out+=sp(q);
   return `<div style="font-size:0;line-height:0;white-space:nowrap;text-align:center">${out}</div><div style="font:${fs}px monospace;line-height:${fs+2}px;color:#000;text-align:center">${esc(code)}</div>`;
 }
-let BC={q:'',pid:0,qty:'',un:0,tpl:'lp37',sc:100,queue:[],cmp:0};
+let BC={q:'',br:'',pid:0,qty:'',un:0,tpl:'lp37',sc:100,queue:[],cmp:0};
 const BCT={a4_3:['A4 sheet — 3 across',3],a4_4:['A4 sheet — 4 across',4],a4_5:['A4 sheet — 5 across',5],lp37:['Label printer 37×20 mm (ASE)',0],lp30:['Label printer 30×15 mm',0],lp50:['Label printer 50×30 mm',0],lp40:['Label printer 40×25 mm',0]};
 const BCM={lp37:[37,20],lp30:[30,15],lp50:[50,30],lp40:[40,25]};
 const bcRate=p=>taxOf(p.tax).rate||0;
 const bcEx=(p,v)=>{const r=bcRate(p);return r>0?r2(v/(1+r/100)):r2(v)};
+const bbcOf=(p,b)=>(((D.st.bbc||{})[p.id])||{})[b]||'';
+function bcUnitB(p,un,br){const u=bcUnits(p)[un]||bcUnits(p)[0];return br&&un===0?Object.assign({},u,{bc:bbcOf(p,br)||u.bc,pr:priceAt(p,br)}):u}
+function bcBrSave(){
+  const p=P(BC.pid),b=BC.br;if(!p||!b)return;
+  const c=($('#bc_bb').value||'').trim(),v=+$('#bc_bp').value||0;
+  D.st.bbc=D.st.bbc||{};D.st.bbc[p.id]=D.st.bbc[p.id]||{};
+  if(c){const o=byCode(c);if(o&&(o.id!==p.id||(bbcOf(p,b)!==c&&(p.code===c||(p.units||[]).some(u=>u.bc===c)||Object.entries(D.st.bbc[p.id]).some(([k,x])=>k!==b&&x===c))))&&true)return toast('এই বারকোড আগে থেকেই আরেকটায় আছে');D.st.bbc[p.id][b]=c}else delete D.st.bbc[p.id][b];
+  const old=priceAt(p,b);D.st.bprice[p.id]=D.st.bprice[p.id]||{};if(v>0)D.st.bprice[p.id][b]=v;else delete D.st.bprice[p.id][b];
+  if(old!==(v>0?v:p.price))logPrice(p,old,v>0?v:p.price,'Branch Price',b);
+  sv();toast('✅ '+b+' এর বারকোড ও দাম সেভ হয়েছে');render();
+}
+function bcBrAuto(){D.seq++;$('#bc_bb').value=eanFromSeq(D.seq);}
 function bcUnits(p){return [{n:'Pcs',f:1,bc:p.code,pr:p.price}].concat((p.units||[]).filter(u=>u.bc).map(u=>({n:u.n,f:+u.f||1,bc:u.bc,pr:+u.pr>0?+u.pr:r2((+u.f||1)*p.price)})))}
 const bcPrinted=p=>Math.max(0,+p.bcn||0);
 const bcLeft=p=>Math.max(0,(p.stock||0)-bcPrinted(p));
@@ -1438,8 +1451,8 @@ function bcSetPrinted(){const p=P(BC.pid);if(!p)return;const v=+$('#bc_pr').valu
 function bcAdd(pid,qty,un){
   const p=P(pid||BC.pid);if(!p)return toast('আগে আইটেম বেছে নিন');
   const q=Math.floor(+(qty!==undefined?qty:BC.qty));if(!(q>0))return toast('কয়টি লেবেল লিখুন');
-  const u=un!==undefined?un:BC.un,it=BC.queue.find(x=>x.pid===p.id&&x.un===u);
-  it?it.q+=q:BC.queue.push({pid:p.id,un:u,q});
+  const u=un!==undefined?un:BC.un,it=BC.queue.find(x=>x.pid===p.id&&x.un===u&&(x.br||'')===(BC.br||''));
+  it?it.q+=q:BC.queue.push({pid:p.id,un:u,q,br:BC.br||''});
   toast('➕ লাইনে যোগ হয়েছে');render();
 }
 function bcAddAll(){let n=0;D.products.forEach(p=>{const l=bcLeft(p);if(l>0&&p.code){const it=BC.queue.find(x=>x.pid===p.id&&x.un===0);it?it.q=l:BC.queue.push({pid:p.id,un:0,q:l});n++}});toast('➕ '+bn(n)+'টি আইটেম যোগ হয়েছে');render()}
@@ -1456,12 +1469,12 @@ function bcLabels(list){
   }else{
     const cell=(A4-6*(tp[1]-1))/tp[1];m=Math.max(0.8,Math.floor(((cell-14)/115)*10)/10);hgt=40;css='border:1px dashed #999;page-break-inside:avoid;';
   }
-  list.forEach(it=>{const p=P(it.pid);if(!p)return;const u=bcUnits(p)[it.un]||bcUnits(p)[0];
+  list.forEach(it=>{const p=P(it.pid);if(!p)return;const u=bcUnitB(p,it.un,it.br||'');
     for(let k=0;k<it.q;k++)cells+=`<div style="${css}box-sizing:border-box;padding:${pad};text-align:center;color:#000;background:#fff">${shop?`<div style="font:bold ${fsS}px sans-serif;line-height:${fsS+1.5}px">${esc(D.set.shop)}</div>`:''}<div style="font:${fsN}px sans-serif;line-height:${fsN+1.5}px;height:${nameH}px;overflow:hidden">${esc(p.name)}${u.f>1?' ('+esc(u.n)+')':''}</div>${bcBars(u.bc,hgt,m,fsC)}<div style="font:bold ${fsP}px sans-serif;line-height:${fsP+2}px">${tk(u.pr)}</div></div>`});
   return lp?`<style>@page{size:${dm[0]}mm ${dm[1]}mm;margin:0}</style>`+cells:`<div style="display:grid;grid-template-columns:repeat(${tp[1]},1fr);gap:6px;padding:12px">${cells}</div>`;
 }
 function bcPrint(){
-  const list=BC.queue.length?BC.queue:(BC.pid&&+BC.qty>0?[{pid:BC.pid,un:BC.un,q:Math.floor(+BC.qty)}]:[]);
+  const list=BC.queue.length?BC.queue:(BC.pid&&+BC.qty>0?[{pid:BC.pid,un:BC.un,q:Math.floor(+BC.qty),br:BC.br||''}]:[]);
   if(!list.length)return toast('লিস্ট খালি — আইটেম ও পরিমাণ দিন');
   const n=sum(list,x=>x.q);if(n>600&&!confirm(bn(n)+'টি লেবেল — অনেক বেশি। চালিয়ে যাবেন?'))return;
   const html=bcLabels(list);
@@ -1473,27 +1486,37 @@ function bcDone(){
   BC.queue.forEach(it=>{const p=P(it.pid),u=bcUnits(p)[it.un]||{f:1};if(p)p.bcn=bcPrinted(p)+it.q*(u.f||1)});
   BC.queue=[];sv();toast('✅ রেকর্ড হয়েছে');render();
 }
+function bcSetSave(k,v){BC[k]=v;D.set[k==='tpl'?'bcTpl':'bcSc']=v;sv();bcSettings()}
+function bcSettings(){
+  $('#modal').innerHTML=`<div class="mask" onclick="if(event.target===this){closeM();render()}"><div class="sheet"><h2 style="margin:0 0 8px">⚙️ লেবেল সেটিংস</h2>
+  <label style="margin-top:0">লেবেল টেমপ্লেট</label><select class="inp" onchange="bcSetSave('tpl',this.value)">${Object.keys(BCT).map(k=>`<option value="${k}" ${k===BC.tpl?'selected':''}>${BCT[k][0]}</option>`).join('')}</select>
+  ${BCT[BC.tpl][1]?'':`<label>স্কেল (৮০% – ১০০%)</label><select class="inp" onchange="bcSetSave('sc',+this.value)">${[100,95,90,85,80].map(v=>`<option value="${v}" ${v===+BC.sc?'selected':''}>${v}%</option>`).join('')}</select><small style="color:var(--mut)">৩৭×২০ মিমি লেবেলে প্রিন্টারে Paper size = ৩৭×২০ মিমি, Scale = ১০০% দিন।</small>`}
+  <button class="btn" style="margin-top:12px" onclick="closeM();render()">✔ ঠিক আছে</button></div></div>`;
+}
 function vBCP(){
-  const p=P(BC.pid),un=p?bcUnits(p):[],u=p?(un[BC.un]||un[0]):null;
-  const pend=D.products.filter(x=>bcLeft(x)>0&&x.code).sort((a,b)=>bcLeft(b)-bcLeft(a));
+  if(!BC.init){BC.init=1;if(D.set.bcTpl&&BCT[D.set.bcTpl])BC.tpl=D.set.bcTpl;if(D.set.bcSc)BC.sc=D.set.bcSc}
+  const p=P(BC.pid),un=p?bcUnits(p):[],u=p?bcUnitB(p,BC.un,BC.br):null;
   return hint('Barcode Printing for an Item','আইটেম খুঁজে বেছে নিন, কয়টি লেবেল লাগবে লিখুন, প্রিন্ট করুন। কয়টায় বারকোড লাগানো আছে সেটা লিখে রাখলে "বাকি" নিজে হিসাব হবে।')+
   `<div class="card"><div style="font-size:13px;margin-bottom:6px">Company: <b>${esc(D.set.shop)}</b></div>
+  <label style="margin-top:0">🏬 ব্রাঞ্চ (আলাদা বারকোড ও দামের জন্য)</label><select class="inp" onchange="BC.br=this.value;render()"><option value="">মূল দোকান / ডিফল্ট</option>${brs().map(b=>`<option ${b===BC.br?'selected':''}>${esc(b)}</option>`).join('')}</select>
   <label style="margin-top:0">Item code / barcode / name</label>
   <div class="row"><input class="inp" id="bcq" placeholder="বারকোড নম্বর বা নাম লিখুন, Enter চাপুন" value="${esc(BC.q)}" oninput="BC.q=this.value;bcRes()" onkeydown="if(event.key==='Enter')bcKey(event)"><button class="btn g" style="flex:0 0 60px" onclick="camScan(v=>{BC.q=v;bcKey({target:{value:v},key:'Enter'})})">📷</button></div>
   <div id="bcres" style="margin-top:6px"></div></div>
-  ${p?`<div class="card"><b>${esc(p.emoji||'')} ${esc(p.name)}</b> <span class="pill">${esc(p.code)}</span>
+  ${p?`<div class="card"><b>${esc(p.emoji||'')} ${esc(p.name)}</b> <span class="pill">${esc(u.bc)}</span>${BC.br?` <span class="pill">${esc(BC.br)}</span>`:''}
+  ${BC.br?`<div style="background:var(--card2);border-radius:10px;padding:8px;margin-top:8px"><b>🏬 ${esc(BC.br)} — আলাদা বারকোড ও দাম</b>
+  <label>এই ব্রাঞ্চের বারকোড (খালি = মূল বারকোড ${esc(p.code)})</label><div class="row"><input class="inp" id="bc_bb" value="${esc(bbcOf(p,BC.br))}" placeholder="${esc(p.code)}"><button class="btn g" style="flex:0 0 80px" onclick="bcBrAuto()">🔢 নতুন</button></div>
+  <label>এই ব্রাঞ্চের দাম ৳ (খালি = মূল দাম ${tk(p.price)})</label><input class="inp" id="bc_bp" type="number" value="${(D.st.bprice[p.id]||{})[BC.br]||''}">
+  <button class="btn" style="margin-top:8px" onclick="bcBrSave()">💾 সেভ</button></div>`:''}
   <div class="row" style="margin-top:8px"><div>Price<br><b>${tk(u.pr)}</b></div><div>Net price<br><b>${tk(bcEx(p,u.pr))}</b></div><div>VAT<br><b>${tk(r2(u.pr-bcEx(p,u.pr)))}</b></div></div>
   <div class="row" style="margin-top:8px"><div>Stock<br><b>${bn(p.stock||0)} pcs</b></div><div>Barcode আছে<br><b>${bn(bcPrinted(p))} pcs</b></div><div>বাকি<br><b style="color:var(--warn)">${bn(bcLeft(p))} pcs</b></div></div>
   <label>স্টকের মধ্যে কয়টায় বারকোড লাগানো আছে?</label><div class="row"><input class="inp" id="bc_pr" type="number" min="0" value="${bcPrinted(p)}"><button class="btn g" style="flex:0 0 90px" onclick="bcSetPrinted()">সেভ</button></div>
   <label>Unit</label><select class="inp" onchange="bcSet('un',this.value)">${un.map((x,i)=>`<option value="${i}" ${i===BC.un?'selected':''}>${esc(x.n)}${x.f>1?' ×'+x.f:''} — ${esc(x.bc)}</option>`).join('')}</select>
   <label>Quantity (লেবেল সংখ্যা)</label><div class="row"><input class="inp" id="bc_q" type="number" min="1" value="${esc(BC.qty)}" oninput="BC.qty=this.value"><button class="btn g" style="flex:0 0 120px" onclick="BC.qty=String(Math.max(1,Math.ceil(bcLeft(P(BC.pid))/(bcUnits(P(BC.pid))[BC.un].f||1))));render()">বাকি (${bn(Math.ceil(bcLeft(p)/(u.f||1)))})</button></div>
   <div class="row" style="margin-top:8px"><button class="btn g" onclick="bcAdd()">➕ লাইনে যোগ</button><button class="btn" onclick="bcPrint()">🖨️ Print</button></div></div>`:''}
-  <div class="card"><label style="margin-top:0">লেবেল টেমপ্লেট</label><select class="inp" onchange="BC.tpl=this.value;render()">${Object.keys(BCT).map(k=>`<option value="${k}" ${k===BC.tpl?'selected':''}>${BCT[k][0]}</option>`).join('')}</select>
-  ${BCT[BC.tpl][1]?'':`<label>স্কেল (৮০% – ১০০%)</label><select class="inp" onchange="BC.sc=+this.value;render()">${[100,95,90,85,80].map(v=>`<option value="${v}" ${v===+BC.sc?'selected':''}>${v}%</option>`).join('')}</select><small style="color:var(--mut)">৩৭×২০ মিমি লেবেলে প্রিন্টারে Paper size = ৩৭×২০ মিমি, Scale = ১০০% দিন।</small>`}</div>
+  <div class="card"><div class="row" style="align-items:center"><div style="flex:1;font-size:13px">🏷️ <b>${esc(BCT[BC.tpl][0])}</b>${BCT[BC.tpl][1]?'':' · স্কেল '+bn(+BC.sc||100)+'%'}</div><button class="btn g sm" style="width:auto;flex:0 0 auto" onclick="bcSettings()">⚙️ Settings</button></div></div>
   ${BC.queue.length?`<div class="card"><b>🖨️ প্রিন্ট লাইন (${bn(sum(BC.queue,x=>x.q))}টি লেবেল)</b>${BC.queue.map((it,i)=>{const x=P(it.pid);return `<div class="ci"><div class="m"><b>${esc(x?x.name:'?')}</b><br><small style="color:var(--mut)">${esc(x?(bcUnits(x)[it.un]||{}).bc:'')}</small></div><input class="inp" type="number" style="width:84px" value="${it.q}" onchange="bcQ(${i},this.value)"></div>`}).join('')}
   <div class="row" style="margin-top:8px"><button class="btn" onclick="bcPrint()">🖨️ সব প্রিন্ট</button><button class="btn ok" onclick="bcDone()">✔ ছাপা হয়েছে — রেকর্ড করুন</button></div><button class="btn g" style="margin-top:8px" onclick="BC.queue=[];render()">লাইন খালি করুন</button></div>`:''}
-  <div class="card"><b>⚠️ বারকোড বাকি আছে (${bn(pend.length)}টি আইটেম)</b>${pend.length?`<button class="btn g sm" style="width:auto;margin:6px 0" onclick="bcAddAll()">সবগুলো লাইনে যোগ করুন</button>`:''}
-  ${pend.slice(0,40).map(x=>`<div class="ci"><div class="m"><b>${esc(x.name)}</b><br><small style="color:var(--mut)">${esc(x.code)} · স্টক ${bn(x.stock||0)} · আছে ${bn(bcPrinted(x))}</small></div><b>${bn(bcLeft(x))}</b><button class="ib" onclick="bcPick(${x.id})">👁️</button><button class="ib" onclick="bcAdd(${x.id},${bcLeft(x)},0)">➕</button></div>`).join('')||'<div class="empty" style="padding:12px">সব আইটেমে বারকোড আছে ✅</div>'}</div>`;
+  `;
 }
 /* ===== Product entry form (ASE-style: name, price, pack sizes / units, photos, sizes, category) ===== */
 let EP=null;
