@@ -429,7 +429,81 @@ function docAsk(kind,id){
   const h=docHtml(kind,id);if(!h)return;
   $('#modal').innerHTML=`<div class="mask" onclick="if(event.target===this)closeM()"><div class="sheet"><div style="background:#fff;border-radius:10px;padding:6px;max-height:55vh;overflow:auto">${h}</div><div class="row" style="margin-top:10px"><button class="btn" onclick="docPrint('${kind}','${id}')">🖨️ PDF / Print</button><button class="btn g" onclick="closeM()">বন্ধ করুন</button></div></div></div>`;
 }
-const pbtn=(k,id)=>`<button class="ib" style="padding:4px 8px" title="PDF / Print" onclick="event.stopPropagation();docPrint('${k}','${id}')">🖨️</button>`;
+const pbtn=(k,id)=>`<button class="ib" style="padding:4px 8px" title="PDF / Print" onclick="event.stopPropagation();docPrint('${k}','${id}')">🖨️</button>`+docBtns(k,id);
+/* ----- delete / edit any invoice, receipt, return, voucher ----- */
+let editSale='';
+function docFind(k,id){return k==='sale'?D.sales.find(x=>x.id===id):k==='purchase'?D.purchases.find(x=>x.id===id):k==='note'?D.notes.find(x=>x.id===id):k==='journal'?J(+id):null}
+const docItems=d=>d.items&&d.items.length?d.items:[d];
+function docBtns(k,id){
+  const d=docFind(k,id);if(!d)return '';
+  if(k==='journal'&&(d.src!=='manual'||!d.posted))return '';
+  const b=(t,fn,ic)=>`<button class="ib" style="padding:4px 8px" title="${t}" onclick="event.stopPropagation();${fn}('${k}','${id}')">${ic}</button>`;
+  const ed=(k==='purchase'||(k==='note'&&d.kind==='debit')||(k==='sale'&&d.src==='pos'))?b('Edit','docEdit','✏️'):'';
+  return ed+b('Delete','docDel','🗑️');
+}
+function docBlock(k,d){
+  if(k==='journal'){if(d.src!=='manual')return 'এটা অটো এন্ট্রি — যে বিল/রিসিপ্ট থেকে এসেছে সেটা মুছুন';if(lockedJids().has(d.id))return '🔒 ভাউচার লক করা'}
+  if(perClosed(d.t))return '🔒 এই মাস ক্লোজ করা — আগে Open Periods করুন';
+  if(k==='sale'){
+    if(d.items.some(i=>i.ret>0)||d.crAdj)return 'এই বিলে ফেরত (ক্রেডিট নোট) হয়েছে — মুছা/এডিট করা যাবে না';
+    if(d.method==='due'&&(d.paidAmt||0)>0.005)return 'বাকির বিলে টাকা আদায় হয়েছে — আগে ওই আদায় ভাউচার মুছুন';
+  }
+  if(k==='purchase'){
+    if(D.notes.some(n=>n.ref===d.id))return 'এই রিসিপ্টের ফেরত নোট আছে — আগে ওটা মুছুন';
+    if(d.method==='due'&&(d.paidAmt||0)>0.005)return 'সাপ্লায়ারকে টাকা দেওয়া হয়েছে — আগে ওই পেমেন্ট ভাউচার মুছুন';
+  }
+  return '';
+}
+function docReverse(k,d){
+  if(k==='sale'){
+    if(d.src==='online'){const o=D.orders.find(x=>x.id===d.ref);if(o){o.sold=false;if(o.status===3)o.status=2}}
+    else d.items.forEach(i=>{stockMove(i.pid,+i.qty,'ret','বিল মুছে #'+d.id,i.cost);if(d.src==='whole')bqAdj(P(i.pid),d.branch||MAIN(),+i.qty)});
+    D.sales=D.sales.filter(x=>x!==d);
+  }else if(k==='purchase'){
+    docItems(d).forEach(i=>{const p=P(i.pid);if(!p)return;const q=+i.qty||0,st=p.stock||0;
+      if(q>0&&st-q>0){const oc=(st*(p.cost||0)-q*(+i.cost||0))/(st-q);if(oc>0)p.cost=r2(oc)}
+      stockMove(i.pid,-q,'sup','রিসিপ্ট মুছে '+d.id,i.cost)});
+    D.purchases=D.purchases.filter(x=>x!==d);
+  }else if(k==='note'){
+    if(d.kind==='debit'){
+      docItems(d).forEach(i=>{if(P(i.pid))stockMove(i.pid,+i.qty||0,'in','রিটার্ন মুছে '+d.id,i.cost)});
+      const pu=D.purchases.find(x=>x.id===d.ref);if(pu)pu.adj=Math.max(0,r2((pu.adj||0)-d.total));
+    }
+    D.notes=D.notes.filter(x=>x!==d);
+  }else if(k==='journal'){D.journal=D.journal.filter(x=>x!==d);return}
+  if(d.jid)D.journal=D.journal.filter(e=>e.id!==d.jid);
+}
+function docGate(k,id){
+  const d=docFind(k,id);if(!d){toast('ডকুমেন্ট পাওয়া যায়নি');return null}
+  const b=docBlock(k,d);if(b){toast(b);return null}
+  if(d.locked&&!askPin())return null;
+  return d;
+}
+function docDel(k,id){
+  const d=docGate(k,id);if(!d)return;
+  const warn=k==='purchase'?docItems(d).filter(i=>P(i.pid)&&(P(i.pid).stock||0)<(+i.qty||0)).map(i=>i.name):[];
+  const eff={sale:'স্টক ফিরে আসবে, হিসাব (জার্নাল) থেকে মুছবে।',purchase:'স্টক কমবে, হিসাব (জার্নাল) থেকে মুছবে।',note:'স্টক ও হিসাব আগের অবস্থায় ফিরবে।',journal:'এই ভাউচার হিসাব থেকে মুছবে।'}[k];
+  if(!confirm('🗑️ '+id+' মুছে ফেলবেন?\n\n'+eff+(warn.length?'\n\n⚠️ স্টক মাইনাসে যাবে: '+warn.join(', '):'')+'\n\nএটা আর ফেরানো যাবে না।'))return;
+  docReverse(k,d);sv();closeM();toast('🗑️ '+id+' মুছে ফেলা হয়েছে');render();
+}
+function docEdit(k,id){
+  const d=docGate(k,id);if(!d)return;
+  if(k==='sale'){
+    if(d.src!=='pos')return toast('শুধু POS বিল এডিট হয় — অন্যটা মুছে নতুন করুন');
+    if(!confirm('✏️ '+id+' এডিট করবেন? বিলটা POS এ খুলবে। "বিক্রি সম্পন্ন" না চাপা পর্যন্ত কিছু বদলাবে না।'))return;
+    bill=d.items.map(i=>({pid:i.pid,qty:+i.qty,price:+i.price,f:1,un:''}));
+    pd={disc:d.disc||0,method:d.method||'cash',cust:d.cust||'',phone:d.phone||''};editSale=d.id;closeM();goTab('pos');return;
+  }
+  if(!confirm('✏️ '+id+' এডিট করবেন? ফর্মে খুলবে। Save না চাপা পর্যন্ত কিছু বদলাবে না।'))return;
+  const m=k==='note'?'ret':'rec',st=prNew(m);
+  st.editId=d.id;st.sup=d.supplier||'';st.date=dateVal(d.t);st.pm=d.method||'due';st.inv=d.inv||'';st.invd=d.invd||'';st.due=d.due||'';
+  st.ref=d.ref||'';st.note=(m==='ret'?d.reason:d.note)||'';st.vat=d.vno||'';st.pays=(d.pays||[]).slice();st.h1=d.h1||'';st.h2=d.h2||'';st.diff=d.diff||'';st.cp=m==='ret'?(d.ref||''):'';
+  st.lines=docItems(d).map(i=>{const f=+i.f||1,p=P(i.pid),q=i.uq!==undefined?+i.uq:(+i.qty||0)/f;
+    const pr=i.pr!==undefined?+i.pr:r2(((+i.net||0)+(+i.dv||0))/Math.max(q,1));
+    return{code:p?p.code:'',pid:i.pid,f,qty:String(q),bonus:i.bonus?String(i.bonus):'',price:String(pr),d:i.pr!==undefined&&i.d?String(i.d):'',dt:i.dtp||'%',rate:i.rate!==undefined?String(i.rate):''}});
+  if(PRC&&PRC.mode!==m)PRS[PRC.mode]=PRC;
+  PRS[m]=st;PRC=st;closeM();goTab(m==='ret'?'st_dn':'stock');
+}
 const shopH=()=>esc(D.set.shop)+(D.set.vat?`<div style="font-size:11px;font-weight:600">VAT No: ${esc(D.set.vat)}</div>`:'')+(D.set.addr?`<div style="font-size:11px;font-weight:400">${esc(D.set.addr)}</div>`:'');
 function rawPrint(html){const p=$('#printarea');p.innerHTML=html;setTimeout(()=>{window.print()},150)}
 /* ----- PDF file (share / save) + print ----- */
@@ -892,23 +966,24 @@ function vDash(){
 
 /* ===== POS ===== */
 let bill=[],pd={disc:0,method:'cash',cust:'',phone:''};
+const oldQ=pid=>{if(!editSale)return 0;const o=D.sales.find(x=>x.id===editSale);return o?sum(o.items.filter(i=>i.pid===pid),i=>+i.qty):0};
 function posAdd(code){
   const p=find(code);if(!p)return toast('❌ প্রোডাক্ট পাওয়া যায়নি: '+code);
   const u=byCode(code)===p?unitOf(p,code):null,f=u?(+u.f||1):1,un=u&&f>1?u.n:'',price=u?(+u.pr>0?+u.pr:r2(f*eff(p))):eff(p);
   const it=bill.find(b=>b.pid===p.id&&(b.f||1)===f&&b.price===price),q=(it?it.qty:0)+1;
   const used=sum(bill.filter(b=>b.pid===p.id&&b!==it),b=>b.qty*(b.f||1));
-  if(used+q*f>p.stock)return toast('স্টক নেই (আছে: '+bn(p.stock)+' পিস)');
+  if(used+q*f>p.stock+oldQ(p.id))return toast('স্টক নেই (আছে: '+bn(p.stock)+' পিস)');
   it?it.qty=q:bill.push({pid:p.id,qty:1,price,f,un});
   render();
 }
 function scanKey(e){if(e.key==='Enter'){const v=e.target.value.trim();e.target.value='';if(v)posAdd(v)}}
-function posQty(i,d){const b=bill[i],p=P(b.pid);if(d>0&&sum(bill.filter(x=>x.pid===b.pid),x=>x.qty*(x.f||1))+(b.f||1)>p.stock)return toast('স্টক নেই');b.qty+=d;if(b.qty<=0)bill.splice(i,1);render()}
+function posQty(i,d){const b=bill[i],p=P(b.pid);if(d>0&&sum(bill.filter(x=>x.pid===b.pid),x=>x.qty*(x.f||1))+(b.f||1)>p.stock+oldQ(b.pid))return toast('স্টক নেই');b.qty+=d;if(b.qty<=0)bill.splice(i,1);render()}
 function posSub(){return sum(bill,b=>b.qty*b.price)}
 function vPOS(){
   const sub=posSub(),disc=Math.min(+pd.disc||0,sub);
   const methods=[['cash','নগদ'],['bkash','bKash'],['nagad','Nagad'],['card','কার্ড'],['due','বাকি']];
   const dues=D.sales.filter(s=>!s.paidAt&&s.method==='due');
-  return `<div class="card"><label style="margin-top:0">📷 বারকোড স্ক্যান করুন / নাম লিখে Enter চাপুন</label>
+  return `${editSale?`<div class="card" style="border:1px solid var(--warn)">✏️ <b>${esc(editSale)}</b> এডিট হচ্ছে — "বিক্রি সম্পন্ন" চাপলে পুরনো বিলটা বদলে যাবে। <button class="btn g sm" style="width:auto" onclick="editSale='';bill=[];render()">এডিট বাতিল</button></div>`:''}<div class="card"><label style="margin-top:0">📷 বারকোড স্ক্যান করুন / নাম লিখে Enter চাপুন</label>
   <div class="row"><input class="inp" id="scan" inputmode="numeric" placeholder="বারকোড নম্বর..." onkeydown="scanKey(event)"><button class="btn g" style="flex:0 0 60px" onclick="camScan(posAdd)">📷</button></div>
   <small style="color:var(--mut)">USB/ব্লুটুথ স্ক্যানার দিয়ে স্ক্যান করলে নিজে নিজেই যোগ হবে।</small></div>
   <div class="card">${bill.length?bill.map((b,i)=>{const p=P(b.pid);return `<div class="ci"><div class="m"><b>${esc(p.name)}</b>${b.un?` <span class="pill">${esc(b.un)} ×${b.f}</span>`:''}<br><small style="color:var(--mut)">${esc(p.code)} · স্টক ${bn(p.stock)}</small></div>
@@ -918,21 +993,22 @@ function vPOS(){
   <div class="row"><div><label>কাস্টমার (ঐচ্ছিক)</label><input class="inp" value="${esc(pd.cust)}" onchange="pd.cust=this.value"></div><div><label>ফোন</label><input class="inp" value="${esc(pd.phone)}" onchange="pd.phone=this.value"></div></div>
   <div class="tot"><span>সাবটোটাল</span><span>${tk(sub)}</span></div><div class="tot b"><span>মোট</span><span>${tk(sub-disc)}</span></div>
   <button class="btn ok" style="margin-top:10px" onclick="posDone()">✓ বিক্রি সম্পন্ন করুন</button>
-  ${bill.length?`<button class="btn g" style="margin-top:8px" onclick="bill=[];render()">বিল বাতিল</button>`:''}</div>
+  ${bill.length?`<button class="btn g" style="margin-top:8px" onclick="bill=[];editSale='';render()">বিল বাতিল</button>`:''}</div>
   ${dues.length?`<div class="card"><b>💳 বাকির তালিকা (${tk(sum(dues,s=>sOut(s)))})</b>${dues.map(s=>`<div class="ci"><div class="m">#${s.id} · ${esc(s.cust||'নামহীন')} ${esc(s.phone||'')}<br><small style="color:var(--mut)">${fdt(s.t)}</small></div><b>${tk(sOut(s))}</b><button class="btn sm ok" style="width:auto" onclick="rrvSel='${s.id}';goTab('rrv')">আদায়</button></div>`).join('')}</div>`:''}
-  <div class="card"><b>সাম্প্রতিক বিল</b>${D.sales.slice(0,8).map(s=>`<div class="ci"><div class="m">#${s.id} · ${fdt(s.t)}<br><small style="color:var(--mut)">${s.src==='online'?'অনলাইন':'POS'} · ${esc(s.method)}</small></div><b>${tk(s.total)}</b><button class="ib" onclick="receipt('${s.id}')">🖨️</button></div>`).join('')||'<div class="empty" style="padding:12px">কোনো বিল নেই</div>'}</div>`;
+  <div class="card"><b>সাম্প্রতিক বিল</b>${D.sales.slice(0,8).map(s=>`<div class="ci"><div class="m">#${s.id} · ${fdt(s.t)}<br><small style="color:var(--mut)">${s.src==='online'?'অনলাইন':'POS'} · ${esc(s.method)}</small></div><b>${tk(s.total)}</b><button class="ib" onclick="receipt('${s.id}')">🖨️</button>${docBtns('sale',s.id)}</div>`).join('')||'<div class="empty" style="padding:12px">কোনো বিল নেই</div>'}</div>`;
 }
 function posDone(){
   if(!bill.length)return toast('বিল খালি');
-  for(const b of bill){if(sum(bill.filter(x=>x.pid===b.pid),x=>x.qty*(x.f||1))>P(b.pid).stock)return toast('স্টক কম: '+P(b.pid).name)}
+  for(const b of bill){if(sum(bill.filter(x=>x.pid===b.pid),x=>x.qty*(x.f||1))>P(b.pid).stock+oldQ(b.pid))return toast('স্টক কম: '+P(b.pid).name)}
   const due=pd.method==='due';
   if(due&&!String(pd.cust||'').trim())return toast('বাকির বিলে কাস্টমারের নাম দিন');
-  D.billSeq=(D.billSeq||0)+1;
-  const s=buildSale(bill.map(b=>({pid:b.pid,qty:b.qty*(b.f||1),price:b.price/(b.f||1)})),+pd.disc||0,0,pd.method,{id:'B'+pad(D.billSeq),t:Date.now(),src:'pos',cust:pd.cust,phone:pd.phone,paidAt:due?null:Date.now()});
+  let od=null;if(editSale){od=D.sales.find(x=>x.id===editSale);if(od){const bk=docBlock('sale',od);if(bk)return toast(bk);docReverse('sale',od)}else editSale=''}
+  if(!od)D.billSeq=(D.billSeq||0)+1;
+  const s=buildSale(bill.map(b=>({pid:b.pid,qty:b.qty*(b.f||1),price:b.price/(b.f||1)})),+pd.disc||0,0,pd.method,{id:od?od.id:'B'+pad(D.billSeq),t:od?od.t:Date.now(),src:'pos',cust:pd.cust,phone:pd.phone,paidAt:due?null:Date.now()});
   s.items.forEach((it,k)=>{if(bill[k]&&bill[k].un)it.name+=' — '+bill[k].qty+' '+bill[k].un+' (×'+bill[k].f+')'});
   s.paidAmt=due?0:s.total;
   s.items.forEach(i=>stockMove(i.pid,-i.qty,'sale','বিল #'+s.id,i.cost));
-  postSale(s);D.sales.unshift(s);sv();bill=[];pd.disc=0;pd.cust='';pd.phone='';
+  postSale(s);D.sales.unshift(s);sv();editSale='';bill=[];pd.disc=0;pd.cust='';pd.phone='';
   render();receipt(s.id);
 }
 function receipt(id){
@@ -1097,6 +1173,7 @@ function vPR(M){M=M||'rec';const R=M==='ret';
   return `<style>.ase{background:#fffbe3;border:1px solid #d9d2a0;border-radius:10px;padding:10px;color:#000}.ase input,.ase select{width:100%;box-sizing:border-box;border:1px solid #999;border-radius:3px;background:#fff;color:#000;padding:5px 6px;margin:0;font-size:13px}.ase .g8{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}.ase .g8>div{min-width:0}.ase .g8 .bt,.ase .g8 .ft{flex:none}.ase .g8 input,.ase .g8 select{min-width:0}@media(max-width:640px){.ase .g8{grid-template-columns:repeat(2,minmax(0,1fr))}.ase .g8>div[style*='span 3'],.ase .g8>div[style*='span 2']{grid-column:span 2!important}}.ase .done{background:#d7f5dc;border:1px solid #5bbf6b;border-radius:8px;padding:8px 10px;margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ase table{min-width:820px;font-size:12px}.ase td,.ase th{padding:1px 2px;border:0;color:#000;vertical-align:middle}.ase th{font-size:11px;background:none;text-align:left}.ase .no{background:#5bbcc4;color:#000;text-align:center;font-weight:700;width:26px;border-radius:2px}.ase .ro{background:#e4e4e4}.ase .ft{background:#7a1010;color:#fff!important;font-weight:700;text-align:right;padding:5px 8px;border-radius:3px;min-width:80px}.ase .fb{background:#f1d9a8;border-radius:6px;padding:8px;margin-top:8px}.ase .bt{background:#e9e9e9;border:1px solid #888;border-radius:3px;padding:5px 9px;font-size:12px;color:#000;width:auto}.ase .y{background:#fff7a8!important}.ase tr.l2 td{padding-bottom:5px;border-bottom:1px solid #e6dfae}</style>
   <datalist id="suplist">${D.suppliers.map(s=>`<option value="${esc(s.name)}">${esc(supCode(s))}</option>`).join('')}</datalist>
   <div class="ase">
+   ${h.editId?`<div class="done" style="background:#fff3cd"><span>✏️ Editing <b>${esc(h.editId)}</b> — Save replaces the old one (stock &amp; accounts are re-posted).</span><button class="bt" style="background:#fff" onclick="PRC=prNew(PRC.mode);PRS[PRC.mode]=PRC;render()">Cancel edit</button></div>`:''}
    ${PRLAST?`<div class="done"><span>✅ <b>${esc(PRLAST)}</b> saved.</span><button class="bt" style="background:#fff" onclick="PRLAST='';render()">OK — next company ↓</button></div>`:''}
    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px"><b style="font-size:15px">${R?'Purchase Return (Debit Note)':'Purchase Receipt'}</b><button class="bt" onclick="prPrint()">🖨️ Print</button><button class="bt" onclick="prMulti()">Select several items</button><button class="bt" onclick="camScan(prScan)">📷 Scan</button><button class="bt" onclick="prClear()">New</button><span style="flex:1"></span><span style="font-size:12px;font-weight:600">${R?'Return no.':'Receipt no.'}</span><span class="ft" style="background:#5bbcc4;color:#000!important;min-width:70px;text-align:center;font-size:16px">${prNo()}</span></div>
    <div class="g8">
@@ -1148,7 +1225,7 @@ let PRQ='';
 function prHay(l){const s=D.suppliers.find(x=>x.name===l.supplier)||{};return [l.id,l.supplier,l.inv,l.vno||s.vat,supCode(s.name?s:{}),l.ref,l.note,l.name,(l.items||[]).map(i=>i.name+' '+i.code).join(' '),l.invd,new Date(l.t).toISOString().slice(0,10)].join(' ').toLowerCase()}
 function prResHtml(){
   const t=PRQ.toLowerCase().split(/\s+/).filter(Boolean),l=(PRC&&PRC.mode==='ret'?D.notes.filter(n=>n.kind==='debit'):D.purchases).filter(x=>t.every(k=>prHay(x).includes(k))).slice(0,t.length?60:10);
-  return `<table><tr><th>No.</th><th>Company</th><th>Supplier inv.</th><th>Total</th><th></th></tr>${l.map(x=>{const s=D.suppliers.find(y=>y.name===x.supplier)||{};return `<tr><td>${x.id}<br><small style="color:var(--mut)">${fdt(x.t)}</small></td><td>${esc(x.supplier||'—')}<br><small style="color:var(--mut)">${esc(x.vno||s.vat||'')}</small></td><td>${esc(x.inv||'—')}</td><td>${tk(x.total)}<br><small style="color:var(--mut)">${esc(x.kind?'Return':(MLAB[x.method]||x.method))}</small></td><td style="white-space:nowrap"><button class="ib" onclick="prView('${x.id}')">👁️</button><button class="ib" onclick="docPrint('${x.kind?'note':'purchase'}','${x.id}')">🖨️</button></td></tr>`}).join('')||'<tr><td colspan="5" class="empty">No invoice found</td></tr>'}</table>${t.length?'<small style="color:var(--mut)">'+l.length+' found</small>':''}`;
+  return `<table><tr><th>No.</th><th>Company</th><th>Supplier inv.</th><th>Total</th><th></th></tr>${l.map(x=>{const s=D.suppliers.find(y=>y.name===x.supplier)||{};return `<tr><td>${x.id}<br><small style="color:var(--mut)">${fdt(x.t)}</small></td><td>${esc(x.supplier||'—')}<br><small style="color:var(--mut)">${esc(x.vno||s.vat||'')}</small></td><td>${esc(x.inv||'—')}</td><td>${tk(x.total)}<br><small style="color:var(--mut)">${esc(x.kind?'Return':(MLAB[x.method]||x.method))}</small></td><td style="white-space:nowrap"><button class="ib" onclick="prView('${x.id}')">👁️</button><button class="ib" onclick="docPrint('${x.kind?'note':'purchase'}','${x.id}')">🖨️</button>${docBtns(x.kind?'note':'purchase',x.id)}</td></tr>`}).join('')||'<tr><td colspan="5" class="empty">No invoice found</td></tr>'}</table>${t.length?'<small style="color:var(--mut)">'+l.length+' found</small>':''}`;
 }
 function prResults(){const e=$('#prres');if(e)e.innerHTML=prResHtml()}
 function prView(id){
@@ -1157,7 +1234,7 @@ function prView(id){
   <div class="card">Company: <b>${esc(x.supplier||'—')}</b> ${s.code?'('+esc(s.code)+')':''}<br>VAT no.: ${esc(x.vno||s.vat||'—')}<br>Date: ${fdt(x.t)}${x.due?' · Due: '+esc(x.due):''}<br>Supplier invoice: <b>${esc(x.inv||'—')}</b> ${x.invd?'('+esc(x.invd)+')':''}<br>${x.kind?'Return (debit note)':'Payment: '+esc(MLAB[x.method]||x.method)}${x.reason?'<br>Reason: '+esc(x.reason):''}${x.ref?'<br>Our ref: '+esc(x.ref):''}${x.note?'<br>Notes: '+esc(x.note):''}</div>
   <div class="tbl"><table><tr><th>Item</th><th>Qty</th><th>Bonus</th><th>Net</th><th>VAT</th></tr>${(x.items||[{name:x.name,uq:x.qty,net:x.net,vat:x.vat}]).map(i=>`<tr><td>${esc(i.name)}</td><td>${i.uq||i.qty}${i.un&&i.un!=='Pcs'?' '+esc(i.un):''}</td><td>${i.bonus||''}</td><td>${fx(i.net)}</td><td>${fx(i.vat)}</td></tr>`).join('')}</table></div>
   <div style="text-align:right"><b>Total ${tk(x.total)}</b></div>
-  <button class="btn" onclick="docPrint('${x.kind?'note':'purchase'}','${x.id}')">🖨️ Print</button><button class="btn g" onclick="closeM()">Close</button></div></div>`;
+  <button class="btn" onclick="docPrint('${x.kind?'note':'purchase'}','${x.id}')">🖨️ Print</button>${x.kind==='credit'?'':`<div class="row" style="margin-top:8px"><button class="btn g" onclick="docEdit('${x.kind?'note':'purchase'}','${x.id}')">✏️ Edit</button><button class="btn g" style="color:#ef4444" onclick="docDel('${x.kind?'note':'purchase'}','${x.id}')">🗑️ Delete</button></div>`}<button class="btn g" onclick="closeM()">Close</button></div></div>`;
 }
 function prPrint(){
   prRead();const C=prCalc(),h=PRC;if(!C.rows.some(Boolean))return toast('Add items first');
@@ -1200,13 +1277,14 @@ function prSave(){
   if(h.pm==='due'&&!h.sup)return toast('Choose a supplier for a credit purchase');
   if(C.rows.some(r=>r&&r.q>0&&!(r.pr>0)))return toast('Enter a price for every item');
   const sup=addSupplier(h.sup);if(sup){const s=D.suppliers.find(x=>x.name===sup);if(s&&h.vat)s.vat=h.vat}
-  D.pseq=(D.pseq||0)+1;const id='P'+pad(D.pseq);
+  let id;const od=h.editId&&D.purchases.find(x=>x.id===h.editId);
+  if(od){const bk=docBlock('purchase',od);if(bk)return toast(bk);docReverse('purchase',od);id=od.id}else{D.pseq=(D.pseq||0)+1;id='P'+pad(D.pseq)}
   const its=items.map(({l,r},k)=>{const p=r.p,net=r2(r.net+(k===0?C.diff:0)),v=r.v;
-    return{pid:p.id,name:p.name,code:p.code,cat:p.cat,sub:p.sub||'',tax:p.tax,rate:r.v>0?r.rt:0,qty:r.pcs,cost:r2(net/Math.max(r.pcs,1)),net,vat:v,total:r2(net+v),uq:r.q,bonus:r.b,f:+l.f||1,un:((p.units||[]).find(u=>+u.f===(+l.f||1))||{}).n||'Pcs',d:r.d,dv:r.dv}});
+    return{pid:p.id,name:p.name,code:p.code,cat:p.cat,sub:p.sub||'',tax:p.tax,rate:r.v>0?r.rt:0,qty:r.pcs,cost:r2(net/Math.max(r.pcs,1)),net,vat:v,total:r2(net+v),uq:r.q,bonus:r.b,f:+l.f||1,un:((p.units||[]).find(u=>+u.f===(+l.f||1))||{}).n||'Pcs',d:r.d,dv:r.dv,pr:r.pr,dtp:l.dt,rt:r.rt}});
   const net=r2(sum(its,x=>x.net)),vat=r2(sum(its,x=>x.vat)),tot=r2(net+vat),m=h.pm;
   const e=jPost('purchase',id,'Purchase receipt #'+id+(sup?' ('+sup+')':'')+(h.inv?' inv '+h.inv:''),[{a:AC().inv,d:net},{a:AC().vin,d:vat},{a:m==='cash'?AC().cash:(m==='mob'?AC().mob:AC().ap),c:tot}],{cc:'গুদাম',t});
   const f=its[0];
-  const doc={id,t,supplier:sup,pid:f.pid,name:f.name+(its.length>1?' +'+(its.length-1)+' more':''),code:f.code,cat:f.cat,sub:f.sub,tax:f.tax,rate:f.rate,qty:sum(its,x=>x.qty),cost:r2(net/Math.max(sum(its,x=>x.qty),1)),net,vat,total:tot,method:m,paidAmt:m==='due'?0:tot,adj:0,note:h.note,inv:h.inv,invd:h.invd,vno:h.vat||(sup&&(D.suppliers.find(x=>x.name===sup)||{}).vat)||'',due:h.due,ref:h.ref,pays:h.pays.filter(x=>+x.a>0),items:its,jid:e.id};
+  const doc={id,t,supplier:sup,pid:f.pid,name:f.name+(its.length>1?' +'+(its.length-1)+' more':''),code:f.code,cat:f.cat,sub:f.sub,tax:f.tax,rate:f.rate,qty:sum(its,x=>x.qty),cost:r2(net/Math.max(sum(its,x=>x.qty),1)),net,vat,total:tot,method:m,paidAmt:m==='due'?0:tot,adj:0,note:h.note,inv:h.inv,invd:h.invd,vno:h.vat||(sup&&(D.suppliers.find(x=>x.name===sup)||{}).vat)||'',due:h.due,ref:h.ref,pays:h.pays.filter(x=>+x.a>0),items:its,jid:e.id,h1:h.h1,h2:h.h2,diff:h.diff};
   D.purchases.unshift(doc);
   its.forEach(x=>{const p=P(x.pid),old=p.stock||0;p.cost=old>0?r2((old*p.cost+x.qty*x.cost)/(old+x.qty)):x.cost;stockMove(x.pid,x.qty,'in',(h.note||'Purchase #'+id),x.cost)});
   if(h.po){const o=D.st.po.find(x=>x.id===h.po);if(o){o.status='received';o.rt=Date.now()}}
@@ -1765,14 +1843,15 @@ function retSave(){
   if(!h.sup)return toast('Choose the company');
   if(C.rows.some(r=>r&&r.q>0&&!(r.pr>0)))return toast('Enter a price for every item');
   const need={};items.forEach(({r})=>{need[r.p.id]=(need[r.p.id]||0)+r.q*(+PRC.lines[C.rows.indexOf(r)].f||1)});
-  for(const k in need){const p=P(+k);if(need[k]>(p.stock||0))return toast('Not enough stock to return: '+p.name+' (stock '+(p.stock||0)+')')}
+  const od=h.editId&&D.notes.find(x=>x.id===h.editId),oq={};if(od)docItems(od).forEach(i=>{oq[i.pid]=(oq[i.pid]||0)+(+i.qty||0)});
+  for(const k in need){const p=P(+k);if(need[k]>(p.stock||0)+(oq[k]||0))return toast('Not enough stock to return: '+p.name+' (stock '+(p.stock||0)+')')}
   const sup=addSupplier(h.sup),pu=D.purchases.find(x=>x.id.toUpperCase()===(h.cp||'').trim().toUpperCase()),ref=pu&&pu.supplier===sup?pu.id:'';
-  D.nseq.dn++;const id='DN'+pad(D.nseq.dn);
+  let id;if(od){const bk=docBlock('note',od);if(bk)return toast(bk);docReverse('note',od);id=od.id}else{D.nseq.dn++;id='DN'+pad(D.nseq.dn)}
   const its=items.map(({l,r},k)=>{const p=r.p,pcs=r.q*(+l.f||1),net=r2(r.net+(k===0?C.diff:0)),v=r.v;
-    return{pid:p.id,name:p.name,code:p.code,cat:p.cat,sub:p.sub||'',tax:p.tax,rate:v>0?r.rt:0,qty:pcs,cost:r2(net/Math.max(pcs,1)),net,vat:v,total:r2(net+v),uq:r.q,f:+l.f||1,un:((p.units||[]).find(u=>+u.f===(+l.f||1))||{}).n||'Pcs',d:r.d,dv:r.dv}});
+    return{pid:p.id,name:p.name,code:p.code,cat:p.cat,sub:p.sub||'',tax:p.tax,rate:v>0?r.rt:0,qty:pcs,cost:r2(net/Math.max(pcs,1)),net,vat:v,total:r2(net+v),uq:r.q,f:+l.f||1,un:((p.units||[]).find(u=>+u.f===(+l.f||1))||{}).n||'Pcs',d:r.d,dv:r.dv,pr:r.pr,dtp:l.dt,rt:r.rt}});
   const net=r2(sum(its,x=>x.net)),vat=r2(sum(its,x=>x.vat)),tot=r2(net+vat),f=its[0],q=sum(its,x=>x.qty);
   const e=jPost('debitnote',id,'Supplier debit note '+id+' — '+sup+(h.inv?' ref '+h.inv:''),[{a:AC().ap,d:tot},{a:AC().inv,c:net},{a:AC().vin,c:vat}],{cc:'গুদাম',t});
-  D.notes.unshift({id,kind:'debit',t,supplier:sup,pid:f.pid,name:f.name+(its.length>1?' +'+(its.length-1)+' more':''),cat:f.cat,sub:f.sub,tax:f.tax,rate:f.rate,qty:q,cost:r2(net/Math.max(q,1)),net,vat,total:tot,ref,reason:h.note,inv:h.inv,invd:h.invd,vno:h.vat||'',items:its,jid:e.id});
+  D.notes.unshift({id,kind:'debit',t,supplier:sup,pid:f.pid,name:f.name+(its.length>1?' +'+(its.length-1)+' more':''),cat:f.cat,sub:f.sub,tax:f.tax,rate:f.rate,qty:q,cost:r2(net/Math.max(q,1)),net,vat,total:tot,ref,reason:h.note,inv:h.inv,invd:h.invd,vno:h.vat||'',items:its,jid:e.id,h1:h.h1,h2:h.h2,diff:h.diff});
   if(ref)pu.adj=r2((pu.adj||0)+tot);
   its.forEach(x=>stockMove(x.pid,-x.qty,'sup','Debit note '+id,x.cost));
   PRC=prNew('ret');PRLAST=id;sv();toast('✅ Return '+id+' saved — stock reduced');render();window.scrollTo(0,0);docAsk('note',id);
@@ -2114,7 +2193,7 @@ function vWS(){
   <div class="row"><div><label>সেলস রেপ</label>${hsel('ws','rep',[['','— নেই —'],...D.st.reps.filter(r=>r.type==='rep').map(r=>[r.name,r.name])],'')}</div><div><label>ব্রাঞ্চ</label>${hsel('ws','branch',brs(),MAIN())}</div></div></div>`+lbView('ws',{price:true})+
   `<div class="card"><div class="row"><div><label style="margin-top:0">ডিসকাউন্ট ৳</label>${hin('ws','disc','0','number')}</div><div><label style="margin-top:0">পেমেন্ট</label>${hsel('ws','method',PAYM,'cash')}</div></div><div class="tot b"><span>মোট</span><span>${tk(tot-d)}</span></div>
   <button class="btn ok" style="margin-top:8px" onclick="wsSave()">✓ বিক্রি সম্পন্ন করুন</button><button class="btn g" style="margin-top:8px" onclick="LB.ws={lines:[]};H.ws={};render()">নতুন করে শুরু</button><button class="btn g" style="margin-top:8px" onclick="goTab('pos')">🧾 Retail Sales (POS) এ যান</button></div>
-  <div class="card"><b>সাম্প্রতিক পাইকারি বিল</b>${T(['বিল','কাস্টমার','মোট',''],rec.map(s=>[s.id+lockI(s),esc(s.cust),tk(s.total),`<button class="ib" onclick="receipt('${s.id}')">🖨️</button>`]))}</div>`;
+  <div class="card"><b>সাম্প্রতিক পাইকারি বিল</b>${T(['বিল','কাস্টমার','মোট',''],rec.map(s=>[s.id+lockI(s),esc(s.cust),tk(s.total),`<button class="ib" onclick="receipt('${s.id}')">🖨️</button>`+docBtns('sale',s.id)]))}</div>`;
 }
 function wsSave(){
   if(!chkPer())return;const L=lbLines('ws'),h=hh('ws'),br=hv('ws','branch',MAIN()),m=hv('ws','method','cash');
@@ -2330,7 +2409,7 @@ function vSI(){
   const l=D.sales.filter(s=>inR(s.t,f,t)&&(!siS||s.src===siS)&&(!q||(s.id+' '+(s.cust||'')+' '+(s.phone||'')+' '+s.items.map(i=>i.name).join(' ')).toLowerCase().includes(q)));
   return hint('Sales Inquiry','বিক্রির হিসাব বা বিল/ইনভয়েস খুঁজুন ও যাচাই করুন — বিল নং, কাস্টমার, ফোন বা পণ্যের নাম দিয়ে।')+perBar()+
   `<div class="card"><div class="row"><input class="inp" placeholder="বিল / কাস্টমার / ফোন / পণ্য" value="${esc(siQ)}" onchange="siQ=this.value;render()"><select onchange="siS=this.value;render()">${[['','সব'],['pos','POS'],['whole','পাইকারি'],['online','অনলাইন']].map(x=>`<option value="${x[0]}" ${siS===x[0]?'selected':''}>${x[1]}</option>`).join('')}</select></div></div>
-  <div class="card">${T(['বিল','তারিখ','কাস্টমার','মোট','অবস্থা',''],l.slice(0,100).map(s=>[s.id+lockI(s),fdt(s.t),esc(s.cust||'—'),tk(s.total),s.method==='due'&&!s.paidAt?'<span class="out">বাকি '+tk(sOut(s))+'</span>':'পরিশোধিত',`<button class="ib" onclick="receipt('${s.id}')">🖨️</button>`]),'কোনো বিল নেই')}<div class="tot b"><span>${bn(l.length)}টি বিল</span><span>${tk(sum(l,s=>s.total))}</span></div></div>`;
+  <div class="card">${T(['বিল','তারিখ','কাস্টমার','মোট','অবস্থা',''],l.slice(0,100).map(s=>[s.id+lockI(s),fdt(s.t),esc(s.cust||'—'),tk(s.total),s.method==='due'&&!s.paidAt?'<span class="out">বাকি '+tk(sOut(s))+'</span>':'পরিশোধিত',`<button class="ib" onclick="receipt('${s.id}')">🖨️</button>`+docBtns('sale',s.id)]),'কোনো বিল নেই')}<div class="tot b"><span>${bn(l.length)}টি বিল</span><span>${tk(sum(l,s=>s.total))}</span></div></div>`;
 }
 let tiS='';
 function vTI(){
