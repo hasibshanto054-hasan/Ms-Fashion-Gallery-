@@ -451,11 +451,13 @@ async function pdfMake(){
   let box;
   try{
     await pdfLib();
-    box=document.createElement('div');
-    box.style.cssText='position:fixed;left:-10000px;top:0;width:733px;background:#fff;color:#000';
-    box.innerHTML=_pdf.html;document.body.appendChild(box);
-    await new Promise(r=>setTimeout(r,150));
-    _pdf.blob=await html2pdf().set({margin:[8,8,8,8],image:{type:'jpeg',quality:.95},html2canvas:{scale:1.5,useCORS:true,backgroundColor:'#ffffff'},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['tr','h2','h3']}}).from(box).outputPdf('blob');
+    const wrap=document.createElement('div');
+    wrap.style.cssText='position:fixed;left:-10000px;top:0;width:733px;height:1px;overflow:hidden';
+    const el=document.createElement('div');
+    el.style.cssText='width:733px;background:#fff;color:#000;font-family:system-ui,sans-serif';
+    el.innerHTML=_pdf.html;wrap.appendChild(el);document.body.appendChild(wrap);box=wrap;
+    await new Promise(r=>setTimeout(r,300));
+    _pdf.blob=await html2pdf().set({margin:[8,8,8,8],image:{type:'jpeg',quality:.95},html2canvas:{scale:1.5,useCORS:true,backgroundColor:'#ffffff'},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['tr','h2','h3']}}).from(el).outputPdf('blob');
     pdfUi('ok');
   }catch(e){_pdf.blob=null;pdfUi('err')}
   finally{if(box)box.remove()}
