@@ -568,7 +568,7 @@ function vSuccess(){
     :(sent?'<b style="color:var(--ok)">✅ আপনার অর্ডার সরাসরি দোকানে পৌঁছে গেছে।</b>':'<b style="color:var(--warn)">⏳ অর্ডার পাঠানো হচ্ছে... ইন্টারনেট না থাকলে নিচের WhatsApp বাটনে পাঠিয়ে দিন।</b>');
   return `<div class="empty" style="padding-top:30px"><div style="font-size:70px">🎉</div><h2>অর্ডার সফল!</h2>
   <p>আপনার অর্ডার নেওয়া হয়েছে।<br>${msg}</p>
-  ${o.pay!=='cod'?'<p style="color:var(--warn)">💰 দোকান আপনার পেমেন্ট যাচাই করে OK করলে তবেই অর্ডার কনফার্ম হবে।</p>':''}
+  ${o.pay!=='cod'?'<p style="color:var(--warn)">💰 দোকান আপনার পেমেন্ট যাচাই করে OK করলে তবেই অর্ডার কনফার্ম হবে।'+(((CAT.set.ach===undefined?24:CAT.set.ach)>0)?' '+bn(CAT.set.ach===undefined?24:CAT.set.ach)+' ঘণ্টার মধ্যে কনফার্ম না হলে অর্ডার নিজে থেকে ক্যানসেল হবে এবং আপনি টাকা দিয়ে থাকলে দোকান ফেরত পাঠাবে।':'')+'</p>':''}
   <div class="card" style="color:var(--tx)">Order ID<br><b style="font-size:26px;color:var(--pri2)">#${esc(o.id)}</b><br><small style="color:var(--mut)">ট্র্যাকিংয়ের জন্য এই ID রাখুন</small></div></div>
   <button class="btn wa" onclick="sendWA('${o.id}')">${sent?'📲 WhatsApp এও জানিয়ে রাখুন (ঐচ্ছিক)':'📲 WhatsApp এ অর্ডার পাঠান'}</button>
   <button class="btn g" style="margin-top:8px" onclick="trackId='${o.id}';go('track')">📦 অর্ডার ট্র্যাক করুন</button>
@@ -584,7 +584,7 @@ function vTrack(){
   if(trackId&&!known)res=_tLoad?'<div class="empty">⏳ খোঁজা হচ্ছে...</div>':'<div class="empty">❌ এই ID এর কোনো অর্ডার পাওয়া যায়নি</div>';
   if(trackId&&known){
     const s=statusOf(key),o=C.orders.find(x=>x.id===key);
-    res=`<div class="card"><b>#${esc(key)}</b>${s===4?'<div class="empty" style="padding:14px;color:var(--bad)">এই অর্ডারটি ক্যানসেল করা হয়েছে</div>':`
+    res=`<div class="card"><b>#${esc(key)}</b>${s===4?'<div class="empty" style="padding:14px;color:var(--bad)">এই অর্ডারটি ক্যানসেল করা হয়েছে'+(o&&o.pay!=='cod'?'<br><small style="color:var(--mut)">💸 টাকা দিয়ে থাকলে দোকান আপনার '+esc(o.pay)+' নম্বরে ফেরত পাঠাবে।</small>':'')+'</div>':`
     ${s===0&&o&&o.pay!=='cod'?'<div class="empty" style="padding:10px;color:var(--warn)">💰 আপনার পেমেন্ট যাচাই করা হচ্ছে। যাচাই শেষ হলে অর্ডার কনফার্ম হবে।</div>':''}
     <div class="tl">${STATUS.slice(0,4).map((x,i)=>`<div class="${i<=s?'on':''}"><i>${i<=s?'✓':bn(i+1)}</i>${x}</div>`).join('')}</div>`}
     ${o?o.items.map(i=>`<div class="tot"><span>${esc(i.name)} (${esc(i.size)}) ×${bn(i.qty)}</span><span>${tk(i.price*i.qty)}</span></div>`).join('')+`<div class="tot b"><span>মোট</span><span>${tk(o.total)}</span></div>`:''}</div>`;

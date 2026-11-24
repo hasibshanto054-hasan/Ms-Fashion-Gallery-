@@ -290,7 +290,7 @@ function schedulePush(){
 function catalogObj(){
   const S=D.set;
   return{v:Date.now(),
-    set:{shop:S.shop,wa:S.wa,payNum:S.payNum,coupon:S.coupon,pct:S.pct,offerEnd:S.offerEnd,delivery:S.delivery,freeAbove:S.freeAbove,ai:S.ai||''},
+    set:{shop:S.shop,wa:S.wa,payNum:S.payNum,coupon:S.coupon,pct:S.pct,offerEnd:S.offerEnd,delivery:S.delivery,freeAbove:S.freeAbove,ai:S.ai||'',ach:S.autoCancelH===undefined?24:S.autoCancelH},
     offers:D.offers,
     products:D.products.map(p=>({id:p.id,code:p.code,name:p.name,emoji:p.emoji,price:p.price,old:p.old,cat:p.cat,sizes:p.sizes,colors:p.colors||[],imgs:p.imgs,photos:p.photos||[],desc:p.desc,stock:p.stock,reviews:p.reviews||[]}))};
 }
@@ -326,7 +326,7 @@ async function importCloudOrders(manual){
       if(addOrder(o))n++;
       if((+o.date||0)>(D.cloudLast||0))D.cloudLast=+o.date;
     });
-    if(n){sv();toast('📥 '+bn(n)+'টি নতুন অর্ডার এসেছে');if(tab==='ord'||tab==='home'||tab==='m_ST')render()}
+    if(n){sv();toast('📥 '+bn(n)+'টি নতুন অর্ডার এসেছে');if(tab==='ord'||tab==='home'||tab==='m_OO')render()}
     else if(manual)toast('নতুন কোনো অর্ডার নেই');
     setSync('ok');
   }catch(e){
@@ -722,7 +722,7 @@ function migrate(){
   d.accounts=d.accounts||[];
   ACC_DEF.forEach(a=>{if(!d.accounts.some(x=>x.code===a[0]))d.accounts.push({code:a[0],name:a[1],type:a[2]})});
   ['journal','suppliers','purchases','notes'].forEach(k=>{d[k]=d[k]||[]});
-  d.set=d.set||{};if(d.set.vat===undefined)d.set.vat='98765432198765';
+  d.set=d.set||{};if(d.set.vat===undefined)d.set.vat='98765432198765';if(d.set.autoCancelH===undefined)d.set.autoCancelH=24;
   d.purchases.forEach(x=>{if(typeof x.vat==='string'){x.vno=x.vat;x.vat=r2((x.items||[]).reduce((a,i)=>a+(+i.vat||0),0))}});
   d.jseq=d.jseq||0;d.pseq=d.pseq||0;
   d.st=Object.assign({seq:{},closed:[],docs:[],xf:[],po:[],cats:[],bprice:{},plog:[],reps:[],targets:{},eod:[],open:{status:'draft',lines:{}},sheets:[]},d.st||{});
@@ -837,7 +837,6 @@ const MOD=[
   ['dw','Damage Goods / Write-off Vouchers','নষ্ট মাল বাতিল ভাউচার'],
   ['pc','Price Change Vouchers','দাম পরিবর্তন ভাউচার'],
   ['po','Purchase Orders','সাপ্লায়ারকে ক্রয় অর্ডার'],
-  ['ord','Online Orders','কাস্টমারের অনলাইন অর্ডার'],
   ['sup','Suppliers','সাপ্লায়ারের তালিকা ও দেনা'],
   ['-','Posting and Batch Processing','পোস্টিং ও ব্যাচ প্রসেস'],
   ['lk','Lock Documents','ডকুমেন্ট লক'],
@@ -883,7 +882,9 @@ const MOD=[
  {k:'PM',t:'Promotions - PM',b:'সাপ্তাহিক ও মাসিক অফার',ico:'🎁',items:[
   ['off','Weekly and Monthly Offers','সাপ্তাহিক / মাসিক অফার']]},
  {k:'BC',t:'Barcode Printing - BC',b:'বারকোড লেবেল প্রিন্ট (৩৭×২০ মিমি)',ico:'🏷️',items:[
-  ['bcp','Barcode Printing for an Item','নাম/নম্বর দিয়ে খুঁজে বারকোড লেবেল প্রিন্ট — কয়টায় বারকোড আছে, বাকিটা ছাপুন']]}
+  ['bcp','Barcode Printing for an Item','নাম/নম্বর দিয়ে খুঁজে বারকোড লেবেল প্রিন্ট — কয়টায় বারকোড আছে, বাকিটা ছাপুন']]},
+ {k:'OO',t:'Online Orders - OO',b:'অনলাইন অর্ডার কনফার্ম ও পেমেন্ট যাচাই',ico:'🛒',items:[
+  ['ord','Online Orders','কাস্টমারের অনলাইন অর্ডার — পেমেন্ট যাচাই করে কনফার্ম করুন']]}
 ];
 const NAV=MOD.map(m=>[m.k,m.t,m.items.map(i=>[i[0],i[1]])]);
 const modOf=t=>MOD.find(m=>m.items.some(i=>i[0]===t&&i[0]!=='-'))||null;
@@ -1582,12 +1583,13 @@ function delP(id){if(confirm('প্রোডাক্ট মুছে ফেল
 
 /* ===== ONLINE ORDERS ===== */
 function vOrd(){
-  return `<div class="card"><b>📥 অর্ডার ইম্পোর্ট</b><br><small style="color:var(--mut)">কাস্টমার WhatsApp এ যে মেসেজ পাঠায় (শেষে MSORDER:... কোড থাকে) সেটা এখানে পেস্ট করুন। একই ব্রাউজারে দেওয়া অর্ডার নিজে নিজেই আসে।</small>
+  const rd=D.orders.filter(o=>o.refund&&o.refund.st==='due'),pn=D.orders.filter(needPay);
+  return (pn.length?`<div class="card" style="border:1px solid #e0b800"><b>💰 ${bn(pn.length)}টি অর্ডারের পেমেন্ট যাচাই বাকি</b><br><small style="color:var(--mut)">নিচে প্রতিটায় "Payment received — OK" চাপলে অর্ডার কনফার্ম হবে।${achOf()>0?' '+bn(achOf())+' ঘণ্টায় কনফার্ম না করলে অটো ক্যানসেল হবে।':''}</small></div>`:'')+(rd.length?`<div class="card" style="border:1px solid #e07070"><b>💸 ${bn(rd.length)}টি রিফান্ড বাকি — মোট ${tk(sum(rd,o=>o.refund.amt))}</b><br><small style="color:var(--mut)">কাস্টমারকে bKash/Nagad এ টাকা নিজে ফেরত পাঠিয়ে "ফেরত পাঠিয়েছি" চাপুন।</small></div>`:'')+`<div class="card"><b>📥 অর্ডার ইম্পোর্ট</b><br><small style="color:var(--mut)">কাস্টমার WhatsApp এ যে মেসেজ পাঠায় (শেষে MSORDER:... কোড থাকে) সেটা এখানে পেস্ট করুন। একই ব্রাউজারে দেওয়া অর্ডার নিজে নিজেই আসে।</small>
   <textarea class="inp" id="imp" rows="3" placeholder="WhatsApp মেসেজ পেস্ট করুন"></textarea><button class="btn" style="margin-top:8px" onclick="importOrder()">ইম্পোর্ট করুন</button></div>`+
   (D.orders.length?D.orders.map(o=>`<div class="card"><b>#${esc(o.id)}</b> · ${tk(o.total)} <span class="pill">${esc(o.pay)}</span><br><small style="color:var(--mut)">${fdt(o.date)}</small>
   <div style="font-size:13px;margin:6px 0">${esc(o.name)} · ${esc(o.phone)}<br>${esc(o.addr)}<br>${o.items.map(i=>esc(i.name)+' ('+esc(i.size)+(i.color?', '+esc(i.color):'')+') ×'+bn(i.qty)).join(', ')}${o.txn?'<br>TrxID: '+esc(o.txn):''}</div>
-  ${needPay(o)?`<div style="background:#fff3cd;color:#000;border:1px solid #e0b800;border-radius:10px;padding:8px;margin:6px 0"><b>💰 Payment awaiting your check</b><br><small>${esc(o.pay)} · Amount <b>${tk(o.total)}</b> · TrxID <b>${esc(o.txn||'—')}</b><br>Check the money arrived in your ${esc(o.pay)} account, then press OK. The order is <b>not confirmed</b> until you do.</small>
-  <div class="row" style="margin-top:6px"><button class="btn sm ok" onclick="payOk('${o.id}')">✅ Payment received — OK (confirm)</button><button class="btn sm red" onclick="payNo('${o.id}')">❌ Not received (cancel)</button></div></div>`:''}${o.payOk?`<small style="color:var(--ok)">✅ Payment verified ${o.payAt?fdt(o.payAt):''}</small><br>`:''}
+  ${needPay(o)?`<div style="background:#fff3cd;color:#000;border:1px solid #e0b800;border-radius:10px;padding:8px;margin:6px 0"><b>💰 Payment awaiting your check</b><br><small>${esc(o.pay)} · Amount <b>${tk(o.total)}</b> · TrxID <b>${esc(o.txn||'—')}</b><br>Check the money arrived in your ${esc(o.pay)} account, then press OK. The order is <b>not confirmed</b> until you do.${leftTxt(o)?`<br>⏳ Auto-cancel in <b>${leftTxt(o)}</b> if not confirmed.`:''}</small>
+  <div class="row" style="margin-top:6px"><button class="btn sm ok" onclick="payOk('${o.id}')">✅ Payment received — OK (confirm)</button><button class="btn sm red" onclick="payNo('${o.id}')">❌ Not received (cancel)</button></div></div>`:''}${o.payOk?`<small style="color:var(--ok)">✅ Payment verified ${o.payAt?fdt(o.payAt):''}</small><br>`:''}${o.autoCancelled?`<small style="color:var(--bad)">⏰ কনফার্ম না হওয়ায় অটো ক্যানসেল (${fdt(o.autoCancelled)})</small><br>`:''}${o.refund?(o.refund.st==='due'?`<div style="background:#ffe8e8;color:#000;border:1px solid #e07070;border-radius:10px;padding:8px;margin:6px 0"><b>💸 টাকা ফেরত দিতে হবে: ${tk(o.refund.amt)}</b><br><small>${esc(o.pay)} · ${esc(o.phone)} নম্বরে নিজে পাঠান, তারপর নিচের বাটন চাপুন।</small><div class="row" style="margin-top:6px"><button class="btn sm ok" onclick="refundDone('${o.id}')">✅ ফেরত পাঠিয়েছি</button></div></div>`:`<small style="color:var(--ok)">💸 ${tk(o.refund.amt)} ফেরত দেওয়া হয়েছে ${fdt(o.refund.doneAt)}</small><br>`):''}
   <select onchange="setStatus('${o.id}',+this.value)">${STATUS.map((s,i)=>`<option value="${i}" ${o.status===i?'selected':''}>${s}</option>`).join('')}</select>
   <div class="row" style="margin-top:6px"><button class="btn sm wa" onclick="window.open('https://wa.me/88${esc(o.phone)}','_blank')">গ্রাহককে WhatsApp</button>${o.sold?`<button class="btn sm g" onclick="receipt('${(D.sales.find(s=>s.ref===o.id)||{}).id}')">🖨️ রশিদ</button>`:''}</div></div>`).join(''):'<div class="empty">কোনো অনলাইন অর্ডার নেই</div>')+
   `<div style="font-size:12px;color:var(--mut)">কনফার্মড করলে স্টক কমবে; ডেলিভারড করলে বিক্রি ও লাভের হিসাবে যোগ হবে। স্ট্যাটাস কাস্টমারকে দেখাতে সেটিংস থেকে catalog.json আবার পাবলিশ করুন।</div>`;
@@ -1600,13 +1602,24 @@ function importOrder(){
   catch(e){toast('কোডটি পড়া যায়নি')}
 }
 const needPay=o=>o.pay!=='cod'&&!o.payOk&&o.status===0;
+const achOf=()=>D.set.autoCancelH===undefined?24:+D.set.autoCancelH||0;
+const leftTxt=o=>{const h=achOf();if(!(h>0))return '';const ms=(+o.date||Date.now())+h*3600e3-Date.now();if(ms<=0)return 'এখনই ক্যানসেল হবে';return Math.floor(ms/3600e3)+' ঘ '+Math.floor(ms%3600e3/60e3)+' মি'};
+function autoCancel(){
+  const h=achOf();if(!(h>0))return 0;let n=0;const now=Date.now();
+  D.orders.forEach(o=>{if(!needPay(o)||now-(+o.date||now)<h*3600e3)return;
+    o.status=4;o.autoCancelled=now;if(o.txn)o.refund={amt:o.total,st:'due',t:now};n++});
+  if(n){sv();if(tab==='ord'||tab==='home'||tab==='m_OO')render()}
+  return n;
+}
+function refundDone(id){const o=D.orders.find(x=>x.id===id);if(!o||!o.refund)return;if(!confirm('৳'+o.refund.amt+' কি '+o.phone+' নম্বরে ফেরত পাঠিয়ে দিয়েছেন?'))return;o.refund.st='done';o.refund.doneAt=Date.now();sv();toast('✅ রিফান্ড রেকর্ড হয়েছে');render()}
 function payOk(id){const o=D.orders.find(x=>x.id===id);if(!o)return;o.payOk=true;o.payAt=Date.now();setStatus(id,1);toast('✅ Payment OK — order '+id+' confirmed')}
 function payNo(id){const o=D.orders.find(x=>x.id===id);if(!o)return;if(!confirm('Payment not received — cancel order '+id+'?'))return;setStatus(id,4)}
 function setStatus(id,s){
   const o=D.orders.find(x=>x.id===id);if(!o)return;
   if(needPay(o)&&s>=1&&s<=3){toast('Verify the payment first (press "Payment received — OK")');return render()}
   if(o.sold&&s!==3){toast('ডেলিভারড অর্ডার বদলানো যায় না');return render()}
-  if(s===4){if(o.stocked){o.items.forEach(i=>stockMove(i.pid,+i.qty,'ret','অর্ডার ক্যানসেল #'+o.id));o.stocked=false}}
+  if(s===4){if(o.stocked){o.items.forEach(i=>stockMove(i.pid,+i.qty,'ret','অর্ডার ক্যানসেল #'+o.id));o.stocked=false}
+    if(o.pay!=='cod'&&o.payOk&&!o.sold&&!o.refund)o.refund={amt:o.total,st:'due',t:Date.now()}}
   else if(s>=1&&!o.stocked){o.items.forEach(i=>stockMove(i.pid,-i.qty,'sale','অনলাইন অর্ডার #'+o.id));o.stocked=true}
   if(s===3&&!o.sold){
     D.billSeq=(D.billSeq||0)+1;
@@ -2601,7 +2614,7 @@ function vSet(){
   return `${cloudCard()}
   <div class="card">${f('shop','দোকানের নাম')}${f('vat','MS Fashion Gallery VAT number')}${f('addr','Shop address (shown on invoices)')}${f('wa','WhatsApp নম্বর (৮৮০১...)')}${f('payNum','bKash/Nagad/Rocket নম্বর')}${f('coupon','কুপন কোড')}${f('pct','কুপন ছাড় %','number')}
   <label>কুপনের শেষ তারিখ</label><input class="inp" id="s_end" type="datetime-local" value="${new Date(s.offerEnd-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16)}">
-  ${f('delivery','ডেলিভারি চার্জ','number')}${f('freeAbove','ফ্রি ডেলিভারি (এর উপরে)','number')}${f('ai','ChatGPT Worker URL (ঐচ্ছিক)')}${f('pass','অ্যাডমিন পাসওয়ার্ড')}
+  ${f('delivery','ডেলিভারি চার্জ','number')}${f('freeAbove','ফ্রি ডেলিভারি (এর উপরে)','number')}${f('ai','ChatGPT Worker URL (ঐচ্ছিক)')}${f('autoCancelH','অনলাইন পেমেন্ট অর্ডার কত ঘণ্টায় কনফার্ম না হলে অটো ক্যানসেল (০ = বন্ধ)','number')}${f('pass','অ্যাডমিন পাসওয়ার্ড')}
   <button class="btn" style="margin-top:12px" onclick="saveSet()">সেভ করুন</button></div>
   <div class="card"><b>💾 ব্যাকআপ</b><br><small style="color:var(--mut)">ক্লাউড চালু থাকলে ডাটা অনলাইনে সেভ হয়। তবু মাসে একবার ব্যাকআপ ফাইল রাখুন।</small>
   <div class="row" style="margin-top:8px"><button class="btn g" onclick="bkNow()">⬇️ ব্যাকআপ নিন</button><button class="btn g" onclick="$('#rf').click()">⬆️ রিস্টোর</button></div>
@@ -2610,7 +2623,7 @@ function vSet(){
 }
 function saveSet(){
   const g=k=>$('#s_'+k).value.trim(),s=D.set;
-  Object.assign(s,{shop:g('shop'),vat:g('vat'),addr:g('addr'),wa:g('wa'),payNum:g('payNum'),coupon:g('coupon'),pct:+g('pct')||0,delivery:+g('delivery')||0,freeAbove:+g('freeAbove')||0,ai:g('ai'),pass:g('pass')||'admin123',offerEnd:new Date($('#s_end').value).getTime()||s.offerEnd});
+  Object.assign(s,{shop:g('shop'),vat:g('vat'),addr:g('addr'),wa:g('wa'),payNum:g('payNum'),coupon:g('coupon'),pct:+g('pct')||0,delivery:+g('delivery')||0,freeAbove:+g('freeAbove')||0,ai:g('ai'),autoCancelH:g('autoCancelH')===''?24:Math.max(0,+g('autoCancelH')||0),pass:g('pass')||'admin123',offerEnd:new Date($('#s_end').value).getTime()||s.offerEnd});
   sv();toast('✅ সেটিংস সেভ হয়েছে');render();
 }
 function pubCatalog(){
@@ -2629,6 +2642,7 @@ migrate();OFFERS=D.offers;saveDB(D);
 applyTheme();
 (function(){try{const ic="data:image/svg+xml,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="22" fill="#1a0a2e"/><text x="50" y="66" font-size="56" text-anchor="middle">⚙️</text></svg>');const m={name:'MS Fashion Admin',short_name:'MS Admin',display:'standalone',background_color:'#1a0a2e',theme_color:'#1a0a2e',start_url:location.href.split('#')[0],icons:[{src:ic,sizes:'192x192',type:'image/svg+xml'}]};const l=document.createElement('link');l.rel='manifest';l.href=URL.createObjectURL(new Blob([JSON.stringify(m)],{type:'application/json'}));document.head.appendChild(l)}catch(e){}})();
 if(logged){importInbox();if(cloudOn()){startPoll();schedulePush()}}
+setTimeout(autoCancel,3000);setInterval(autoCancel,60000);
 render();
 </script>
 </body>
