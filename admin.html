@@ -299,6 +299,15 @@ async function cloudPush(manual){
   try{
     const tok=await authTok(),st={};
     D.orders.forEach(o=>{st[o.id]=o.status});
+    const cur=await dbGet('admin/db',tok).catch(()=>null);
+    let cd=null;try{cd=cur&&JSON.parse(cur.json)}catch(e){}
+    if(cd&&cd.products&&cd.products.length&&!(D.products&&D.products.length)){setSync('err');if(manual)toast('⛔ এই ডিভাইসে ডাটা খালি, ক্লাউডের ডাটা বাঁচাতে পাবলিশ বন্ধ। "ক্লাউড ব্যাকআপ থেকে ডাটা লোড" চাপুন');return}
+    const day=new Date().toISOString().slice(0,10);
+    if(cd&&cd.products&&LS.getItem('msf_snapday')!==day){
+      await dbPut('admin/snap/'+day,cur,tok);LS.setItem('msf_snapday',day);
+      try{const ks=Object.keys(await dbGet('admin/snap',tok,'shallow=true')||{}).sort();
+        for(const k of ks.slice(0,Math.max(0,ks.length-60)))await fetch(dbu('admin/snap/'+k,tok),{method:'DELETE'})}catch(e){}
+    }
     await dbPut('catalog',catalogObj(),tok);
     await dbPut('status',st,tok);
     await dbPut('admin/db',{savedAt:D.savedAt||Date.now(),json:JSON.stringify(D)},tok);
@@ -341,6 +350,17 @@ async function cloudRestore(){
   try{const tok=await authTok(),r=await dbGet('admin/db',tok),d=JSON.parse(r.json);if(!d||!d.products)throw new Error('ব্যাকআপ নেই');saveDB(d);location.reload()}
   catch(e){toast('❌ লোড হয়নি: '+e.message)}
 }
+async function cloudSnaps(){
+  try{const tok=await authTok(),ks=Object.keys(await dbGet('admin/snap',tok,'shallow=true')||{}).sort().reverse();
+    if(!ks.length)return toast('এখনো কোনো দৈনিক কপি নেই');
+    const d=prompt('কোন তারিখের ডাটা ফিরিয়ে আনবেন? লিখুন (যেমন '+ks[0]+')\nআছে: '+ks.slice(0,15).join(', '),ks[0]);
+    if(!d||!ks.includes(d.trim()))return;
+    const r=await dbGet('admin/snap/'+d.trim(),tok),x=JSON.parse(r.json);
+    if(!x||!x.products)throw new Error('কপি ভাঙা');
+    if(!confirm(d+' এর ডাটা লোড হবে, বর্তমান ডাটা বদলে যাবে। নিশ্চিত?'))return;
+    saveDB(x);location.reload();
+  }catch(e){toast('❌ '+e.message)}
+}
 async function login(){
   if(cloudOn()){
     const em=$('#ae').value.trim(),pw=$('#ap').value;
@@ -362,7 +382,8 @@ function cloudCard(){
   return `<div class="card"><b>☁️ লাইভ সিঙ্ক চালু</b> <span class="pill" style="color:${c}">${SYNC==='ok'?'সংযুক্ত':SYNC==='err'?'সমস্যা':'অপেক্ষা'}</span><br><small>${esc(AUTH.email||'')}</small><br>
   <small style="color:var(--mut)">প্রোডাক্ট, দাম, স্টক, অফার ও অর্ডার স্ট্যাটাস প্রতিবার সেভের ২-৩ সেকেন্ড পরে কাস্টমার অ্যাপে চলে যায়। কাস্টমারের নতুন অর্ডার প্রতি ১৫ সেকেন্ডে আসে। পুরো ডাটার ব্যাকআপও ক্লাউডে থাকে।</small>
   <div class="row" style="margin-top:8px"><button class="btn" onclick="cloudPush(true)">⬆️ এখনই পাবলিশ</button><button class="btn g" onclick="importCloudOrders(true)">📥 নতুন অর্ডার আনুন</button></div>
-  <button class="btn g" style="margin-top:8px" onclick="cloudRestore()">⬇️ ক্লাউড ব্যাকআপ থেকে ডাটা লোড</button></div>`;
+  <button class="btn g" style="margin-top:8px" onclick="cloudRestore()">⬇️ ক্লাউড ব্যাকআপ থেকে ডাটা লোড</button>
+  <button class="btn g" style="margin-top:8px" onclick="cloudSnaps()">🕓 আগের দিনের কপি থেকে ফিরিয়ে আনুন</button><small style="color:var(--mut)">প্রতিদিন ক্লাউডে একটি করে কপি জমা হয় (শেষ ৬০ দিন)।</small></div>`;
 }
 
 const P=id=>D.products.find(p=>p.id===id);
@@ -403,14 +424,63 @@ function docHtml(kind,id){
     return W(docHead('ভাউচার / Voucher',e.no+(e.ref?' ('+e.ref+')':''),e.t)+esc(e.desc)+(e.cc?'<br>কস্ট সেন্টার: '+esc(e.cc):'')+docTbl(['অ্যাকাউন্ট','ডেবিট','ক্রেডিট'],e.lines.map(l=>[esc(aname(l.a)),l.d?tk(l.d):'',l.c?tk(l.c):'']).concat([['<b>মোট</b>','<b>'+tk(sum(e.lines,l=>l.d))+'</b>','<b>'+tk(sum(e.lines,l=>l.c))+'</b>']]))+`<div style="margin-top:6px;color:#555">অবস্থা: ${e.posted?'পোস্টেড':'আনপোস্টেড'}</div>`+docSign())}
   return '';
 }
-function docPrint(kind,id){const h=docHtml(kind,id);if(!h)return toast('ডকুমেন্ট পাওয়া যায়নি');printArea(h)}
+function docPrint(kind,id){const h=docHtml(kind,id);if(!h)return toast('ডকুমেন্ট পাওয়া যায়নি');printArea(h,kind+'-'+id)}
 function docAsk(kind,id){
   const h=docHtml(kind,id);if(!h)return;
   $('#modal').innerHTML=`<div class="mask" onclick="if(event.target===this)closeM()"><div class="sheet"><div style="background:#fff;border-radius:10px;padding:6px;max-height:55vh;overflow:auto">${h}</div><div class="row" style="margin-top:10px"><button class="btn" onclick="docPrint('${kind}','${id}')">🖨️ PDF / Print</button><button class="btn g" onclick="closeM()">বন্ধ করুন</button></div></div></div>`;
 }
 const pbtn=(k,id)=>`<button class="ib" style="padding:4px 8px" title="PDF / Print" onclick="event.stopPropagation();docPrint('${k}','${id}')">🖨️</button>`;
 const shopH=()=>esc(D.set.shop)+(D.set.vat?`<div style="font-size:11px;font-weight:600">VAT No: ${esc(D.set.vat)}</div>`:'')+(D.set.addr?`<div style="font-size:11px;font-weight:400">${esc(D.set.addr)}</div>`:'');
-function printArea(html){const p=$('#printarea');p.innerHTML=html;setTimeout(()=>{window.print()},150)}
+function rawPrint(html){const p=$('#printarea');p.innerHTML=html;setTimeout(()=>{window.print()},150)}
+/* ----- PDF file (share / save) + print ----- */
+let _pdf={blob:null,name:'',html:''};
+function pdfLib(){
+  if(window.html2pdf)return Promise.resolve();
+  const urls=['https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js','https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js'];
+  const load=u=>new Promise((ok,no)=>{const s=document.createElement('script');s.src=u;s.onload=ok;s.onerror=()=>no(new Error('load'));document.head.appendChild(s)});
+  return load(urls[0]).catch(()=>load(urls[1]));
+}
+function pdfClose(){const m=$('#pdfm');if(m)m.remove();_pdf.blob=null}
+function pdfUi(state){
+  const m=$('#pdfm');if(!m)return;
+  const ok=state==='ok';
+  m.querySelector('.pdfs').innerHTML=state==='gen'?'⏳ PDF তৈরি হচ্ছে… (ইন্টারনেট লাগবে, ৫-১০ সেকেন্ড)':ok?'✅ PDF তৈরি — '+esc(_pdf.name):'⚠️ PDF তৈরি হয়নি (ইন্টারনেট চেক করুন)। প্রিন্ট বাটন কাজ করবে।';
+  m.querySelectorAll('.pdfb').forEach(b=>b.disabled=!ok);
+}
+async function pdfMake(){
+  let box;
+  try{
+    await pdfLib();
+    box=document.createElement('div');
+    box.style.cssText='position:fixed;left:-10000px;top:0;width:733px;background:#fff;color:#000';
+    box.innerHTML=_pdf.html;document.body.appendChild(box);
+    await new Promise(r=>setTimeout(r,150));
+    _pdf.blob=await html2pdf().set({margin:[8,8,8,8],image:{type:'jpeg',quality:.95},html2canvas:{scale:1.5,useCORS:true,backgroundColor:'#ffffff'},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},pagebreak:{mode:['css','legacy'],avoid:['tr','h2','h3']}}).from(box).outputPdf('blob');
+    pdfUi('ok');
+  }catch(e){_pdf.blob=null;pdfUi('err')}
+  finally{if(box)box.remove()}
+}
+async function pdfShare(){
+  if(!_pdf.blob)return;
+  const f=new File([_pdf.blob],_pdf.name,{type:'application/pdf'});
+  try{
+    if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:_pdf.name});return}
+  }catch(e){if(e&&e.name==='AbortError')return}
+  pdfSave();
+}
+function pdfSave(){
+  if(!_pdf.blob)return;
+  const a=document.createElement('a');a.href=URL.createObjectURL(_pdf.blob);a.download=_pdf.name;document.body.appendChild(a);a.click();a.remove();
+  toast('⬇️ PDF সেভ হয়েছে (Files / Downloads এ দেখুন)');
+}
+function printArea(html,name){
+  pdfClose();
+  const d=new Date(),pad=n=>String(n).padStart(2,'0');
+  _pdf={blob:null,html:html,name:String(name||('MS-Fashion-'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'-'+pad(d.getHours())+pad(d.getMinutes()))).replace(/[^\w.\-]+/g,'_')+'.pdf'};
+  const m=document.createElement('div');m.id='pdfm';
+  m.innerHTML=`<div class="mask" style="z-index:90" onclick="if(event.target===this)pdfClose()"><div class="sheet"><b>📄 ডকুমেন্ট</b><div class="pdfs" style="font-size:12px;margin:6px 0;color:var(--mut)"></div><div class="row" style="margin-top:8px"><button class="btn pdfb" onclick="pdfShare()">📤 PDF পাঠান</button><button class="btn g pdfb" onclick="pdfSave()">⬇️ সেভ</button></div><div class="row" style="margin-top:8px"><button class="btn g" onclick="rawPrint(_pdf.html)">🖨️ প্রিন্ট</button><button class="btn g" onclick="pdfClose()">বন্ধ</button></div></div></div>`;
+  document.body.appendChild(m);pdfUi('gen');pdfMake();
+}
 
 /* ----- stock helper ----- */
 function stockMove(pid,delta,type,note,cost){
@@ -2288,7 +2358,7 @@ function vSet(){
   <label>কুপনের শেষ তারিখ</label><input class="inp" id="s_end" type="datetime-local" value="${new Date(s.offerEnd-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16)}">
   ${f('delivery','ডেলিভারি চার্জ','number')}${f('freeAbove','ফ্রি ডেলিভারি (এর উপরে)','number')}${f('ai','ChatGPT Worker URL (ঐচ্ছিক)')}${f('pass','অ্যাডমিন পাসওয়ার্ড')}
   <button class="btn" style="margin-top:12px" onclick="saveSet()">সেভ করুন</button></div>
-  <div class="card"><b>💾 ব্যাকআপ</b><br><small style="color:var(--mut)">ডাটা শুধু এই ব্রাউজারে থাকে। নিয়মিত ব্যাকআপ নিন (ব্রাউজার ডাটা মুছলে সব চলে যাবে)।</small>
+  <div class="card"><b>💾 ব্যাকআপ</b><br><small style="color:var(--mut)">ক্লাউড চালু থাকলে ডাটা অনলাইনে সেভ হয়। তবু মাসে একবার ব্যাকআপ ফাইল রাখুন।</small>
   <div class="row" style="margin-top:8px"><button class="btn g" onclick="bkNow()">⬇️ ব্যাকআপ নিন</button><button class="btn g" onclick="$('#rf').click()">⬆️ রিস্টোর</button></div>
   <input type="file" id="rf" accept=".json" style="display:none" onchange="restore(this.files[0])"></div>
   <button class="btn red" onclick="if(confirm('সব ডাটা মুছে ডেমো ডাটা আসবে। নিশ্চিত?')&&confirm('সত্যিই মুছবেন? ব্যাকআপ নিয়েছেন?')){LS.removeItem(DBK);IDBM.del().then(()=>location.reload())}">⚠️ সব রিসেট</button>`;
