@@ -343,13 +343,30 @@ function cashPost(c,k,x){
   postSale(s,{cc:c.br||MAIN()});D.sales.unshift(s);return true;
 }
 let _cashBusy=false;
+function cnNew(){D.cashCn=(D.cashCn||0)+1;return 'CN'+pad(D.cashCn)}
+function cnFix(){(D.cashLog||[]).slice().reverse().forEach(l=>{if(!l.cn)l.cn=cnNew()})}
+function cashCnPrint(i){
+  const l=D.cashLog[i];if(!l)return;
+  const li=l.li&&l.li.length?l.li:[{n:'বিল '+(l.no||''),c:'',q:'',v:l.total}];
+  const bc=c=>c?`<br><span style="font-family:monospace;font-size:10px">${esc(c)}</span>`:'';
+  const h=`<div style="padding:12px;font-size:12px;color:#000;font-family:system-ui,sans-serif">${docHead('ক্যানসেল / ফেরত ইনভয়েস (Return Invoice)',l.cn,l.t)}ক্যাশিয়ার: <b>${esc(l.cname)}</b><br>মূল বিল: <b>#${esc(l.id||'—')}</b> ${l.no?'('+esc(l.no)+')':''}<br>ধরন: <b>${l.part?'আংশিক ফেরত':'পুরো বিল ক্যানসেল'}</b>
+  ${docTbl(['#','পণ্য','পিস','টাকা'],li.map((i,k)=>[k+1,esc(i.n)+bc(i.c),i.q===''?'':i.q,r2(i.v)]))}
+  <div style="text-align:right;margin-top:8px"><b style="font-size:15px">মোট ফেরত / ক্যানসেল: ${tk(sum(li,i=>+i.v||0))}</b></div>${docSign()}</div>`;
+  printArea(h,'cancel-'+l.cn);
+}
+let CSF='',CSP='td';
+function cashFilt(t){
+  let a=0,b=Infinity;const d0=sod(Date.now()),n=new Date();
+  if(CSP==='td')a=d0;else if(CSP==='yd'){a=d0-864e5;b=d0}else if(CSP==='mo')a=new Date(n.getFullYear(),n.getMonth(),1).getTime();
+  return t>=a&&t<b;
+}
 function cashPart(c,o,x){
   const ret={};(Array.isArray(x.ret)?x.ret:Object.values(x.ret||{})).forEach(r=>{if(r)ret[r.pid]=(ret[r.pid]||0)+(+r.qty||0)});
   const rows=[],names=[],li=[];let retV=0;
   o.items.forEach(i=>{const rq=Math.min(+i.qty,ret[i.pid]||0);ret[i.pid]=Math.max(0,(ret[i.pid]||0)-rq);if(rq>0)li.push({n:String(i.name||'').replace(/ — .*$/,''),c:i.code||(P(i.pid)||{}).code||'',q:rq,v:r2(rq*i.price)});retV+=rq*i.price;const q=+i.qty-rq;if(q>0){rows.push({pid:i.pid,qty:q,price:+i.price,cost:i.cost});names.push(i.name)}});
   if(retV<=0)return false;
   D.cashLog=D.cashLog||[];
-  D.cashLog.unshift({t:+x.at||Date.now(),cname:c.name,no:x.no||'',id:o.id,total:r2(retV),part:1,li});
+  D.cashLog.unshift({cn:cnNew(),t:+x.at||Date.now(),cname:c.name,cuser:c.user,no:x.no||'',id:o.id,total:r2(retV),part:1,li});
   const old={id:o.id,t:o.t,cust:o.cust,phone:o.phone,method:o.method,paidAt:o.paidAt,ck:o.ck,cashier:o.cashier,cname:o.cname,cno:o.cno,br:o.br,sub:o.sub,disc:o.disc};
   docReverse('sale',o);
   if(!rows.length)return true;
@@ -380,7 +397,7 @@ async function cashImport(manual){
         if(x.void){
           D.cashVoid=D.cashVoid||{};if(D.cashVoid[x.void])continue;D.cashVoid[x.void]=1;
           const o=D.sales.find(z=>z.ck===x.void);
-          D.cashLog=D.cashLog||[];D.cashLog.unshift({t:+x.at||Date.now(),cname:c.name,no:x.no||'',id:o?o.id:'',total:+x.total||0,li:(o?o.items:x.items||[]).map(i=>({n:String(i.name||i.n||'').replace(/ — .*$/,''),c:i.code||(P(+i.pid)||{}).code||'',q:+i.qty,v:r2((+i.qty||0)*(+i.price||0))}))});
+          D.cashLog=D.cashLog||[];D.cashLog.unshift({cn:cnNew(),t:+x.at||Date.now(),cname:c.name,cuser:c.user,no:x.no||'',id:o?o.id:'',total:+x.total||0,li:(o?o.items:x.items||[]).map(i=>({n:String(i.name||i.n||'').replace(/ — .*$/,''),c:i.code||(P(+i.pid)||{}).code||'',q:+i.qty,v:r2((+i.qty||0)*(+i.price||0))}))});
           if(o){docReverse('sale',o);n++}
           continue;
         }
@@ -476,9 +493,10 @@ function vCash(){
   <small style="color:var(--mut)">ক্যাশিয়ার এই লিংক ফোনে খুলে "Add to Home Screen" করবে। তার বিক্রি ১৫ সেকেন্ডের মধ্যে এখানে স্টক ও হিসাবে যোগ হয়।${cloudOn()?'':' ⚠️ ক্লাউড সিঙ্ক বন্ধ — চালু না হলে ক্যাশিয়ার কাজ করবে না।'}</small></div>
   <div class="card"><b>🔐 বিল ক্যানসেল পিন</b><br><small style="color:var(--mut)">ক্যাশিয়ার বিল ক্যানসেল করতে চাইলে এই পিন লাগবে। পিন শুধু আপনি ও যাকে দেবেন সে জানবে।${D.set.cashPinH?' <b>বর্তমান পিন: '+esc(D.set.cashPin||'')+'</b>':' <b style="color:var(--bad)">এখনো সেট হয়নি — সেট না করলে ক্যানসেল করা যাবে না।</b>'}</small>
   <div class="row" style="margin-top:6px"><input class="inp" id="cs_pin" placeholder="নতুন পিন (৪+ অক্ষর)"><button class="btn sm ok fx" style="width:auto" onclick="cashPinSave()">সেভ</button></div></div>
-  <div class="card"><b>🖨️ রিপোর্ট প্রিন্ট / PDF</b>
-  <div class="row"><div><label>ক্যাশিয়ার</label><select class="inp" id="rp_c"><option value="">সবাই</option>${C.map(c=>`<option value="${esc(c.user)}">${esc(c.name)}</option>`).join('')}</select></div><div><label>সময়</label><select class="inp" id="rp_p"><option value="td">আজ</option><option value="yd">গতকাল</option><option value="mo">এই মাস</option><option value="all">সব</option></select></div></div>
-  <button class="btn" style="margin-top:8px" onclick="cashRepSales()">🧾 বিক্রয় ইনভয়েস রিপোর্ট</button><button class="btn g" style="margin-top:8px" onclick="cashRepCancel()">❌ ক্যানসেল / ফেরত রিপোর্ট</button></div>
+  <div class="card"><b>🧾 ক্যাশিয়ারের বিল ও ইনভয়েস</b>
+  <div class="row"><div><label>ক্যাশিয়ার</label><select class="inp" id="rp_c" onchange="CSF=this.value;render()"><option value="">সবাই</option>${C.map(c=>`<option value="${esc(c.user)}" ${CSF===c.user?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div><div><label>সময়</label><select class="inp" id="rp_p" onchange="CSP=this.value;render()">${[['td','আজ'],['yd','গতকাল'],['mo','এই মাস'],['all','সব']].map(o=>`<option value="${o[0]}" ${CSP===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></div></div>
+  ${(()=>{const B=D.sales.filter(x=>x.cashier&&(!CSF||x.cashier===CSF)&&cashFilt(x.t));return `<div class="tot" style="margin-top:6px"><span>${bn(B.length)}টি বিল</span><b>${tk(sum(B,x=>x.total))}</b></div>`+(B.slice(0,100).map(x=>`<div class="ci"><div class="m"><b>#${esc(x.id)}</b> <small style="color:var(--mut)">${esc(x.cno||'')}</small><br><small style="color:var(--mut)">${fdt(x.t)} · ${esc(x.cname||'')} · ${esc(MET[x.method]||x.method)}</small></div><b>${tk(x.total)}</b><button class="btn sm" style="width:auto" onclick="docPrint('sale','${esc(x.id)}')">🖨️ ইনভয়েস</button></div>`).join('')||'<div class="empty" style="padding:12px">এই সময়ে কোনো বিল নেই</div>')})()}
+  <details style="margin-top:8px"><summary style="color:var(--mut)">সারসংক্ষেপ রিপোর্ট (সব বিল একসাথে)</summary><button class="btn g sm" style="margin-top:6px" onclick="cashRepSales()">🧾 বিক্রয় রিপোর্ট</button> <button class="btn g sm" onclick="cashRepCancel()">❌ ক্যানসেল রিপোর্ট</button></details></div>
   ${C.map((c,i)=>{const S=D.sales.filter(s=>s.cashier===c.user),td=S.filter(s=>s.t>=d0),mo=S.filter(s=>s.t>=m0);
     return `<div class="card" style="${c.active===false?'opacity:.6':''}"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><span class="pill">${c.active===false?'বন্ধ':'চালু'}</span></div>
     <small style="color:var(--mut)">আইডি: <b>${esc(c.user)}</b> · পাসওয়ার্ড: <b>${esc(c.pw)}</b></small>
@@ -488,8 +506,8 @@ function vCash(){
   ${D.sales.some(x=>x.cashier)?`<div class="card"><b>🧾 ক্যাশিয়ারের বিক্রি (সাম্প্রতিক)</b>${D.sales.filter(x=>x.cashier).slice(0,40).map(x=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><small style="color:var(--mut)">${fdt(x.t)} · ${esc(x.cname||x.cashier)} · ${esc(MLAB[x.method]||x.method)}</small>
   ${x.items.map(i=>`<div class="tot"><span>${esc(String(i.name).replace(/ — .*$/,''))}${i.code?'<br><b style="font-family:monospace;letter-spacing:1px">'+esc(i.code)+'</b>':''} <small>× ${bn(i.qty)}</small></span><span>${tk(i.qty*i.price)}</span></div>`).join('')}
   <div class="tot"><b>মোট${x.disc?' (ডিসকাউন্ট −'+bn(x.disc)+')':''}</b><b>${tk(x.total)}</b></div><button class="ib" onclick="receipt('${x.id}')">🖨️</button></div>`).join('')}</div>`:''}
-  ${(D.cashLog||[]).length?`<div class="card"><b>❌ ক্যানসেল / ফেরত হওয়া পণ্য</b>${D.cashLog.slice(0,60).map(l=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><small style="color:var(--mut)">${fdt(l.t)} · ${esc(l.cname)}${l.part?' · <b>আংশিক ফেরত</b>':' · <b>পুরো বিল ক্যানসেল</b>'}</small>
-  ${(l.li&&l.li.length?l.li:[{n:'বিল '+(l.no||''),c:'',q:'',v:l.total}]).map(i=>`<div class="tot"><span>${esc(i.n)}${i.c?'<br><b style="font-family:monospace;letter-spacing:1px">'+esc(i.c)+'</b>':''}${i.q!==''?' <small>× '+bn(i.q)+'</small>':''}</span><span>${tk(i.v)}</span></div>`).join('')}</div>`).join('')}</div>`:''}
+  ${(()=>{const L=(D.cashLog||[]).map((l,ix)=>[l,ix]).filter(([l])=>(!CSF||l.cuser===CSF||(!l.cuser&&(C.find(c=>c.name===l.cname)||{}).user===CSF))&&cashFilt(l.t));return L.length?`<div class="card"><b>❌ ক্যানসেল / ফেরত ইনভয়েস (${bn(L.length)}টি)</b>${L.slice(0,100).map(([l,ix])=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><div class="row" style="justify-content:space-between"><span><b>${esc(l.cn||'')}</b> <small style="color:var(--mut)">${fdt(l.t)} · ${esc(l.cname)}${l.part?' · আংশিক ফেরত':' · পুরো বিল'}</small></span><button class="btn sm" style="width:auto;flex:0 0 auto" onclick="cashCnPrint(${ix})">🖨️ ইনভয়েস</button></div>
+  ${(l.li&&l.li.length?l.li:[{n:'বিল '+(l.no||''),c:'',q:'',v:l.total}]).map(i=>`<div class="tot"><span>${esc(i.n)}${i.c?'<br><b style="font-family:monospace;letter-spacing:1px">'+esc(i.c)+'</b>':''}${i.q!==''?' <small>× '+bn(i.q)+'</small>':''}</span><span>${tk(i.v)}</span></div>`).join('')}</div>`).join('')}</div>`:''})()}
   ${C.length<10?`<div class="card"><b>➕ নতুন ক্যাশিয়ার (${bn(C.length)}/১০)</b>
   <label>নাম</label><input class="inp" id="cs_n"><label>লগইন আইডি (ইংরেজি, যেমন rahim1)</label><input class="inp" id="cs_u" autocapitalize="none"><label>পাসওয়ার্ড (কমপক্ষে ৬)</label><input class="inp" id="cs_p"><label>ব্রাঞ্চ</label><select class="inp" id="cs_b">${brs().map(b=>`<option>${esc(b)}</option>`).join('')}</select>
   <button class="btn ok" style="margin-top:8px" onclick="cashAdd()">✓ তৈরি করুন</button></div>`:''}`;
@@ -908,7 +926,7 @@ function migrate(){
   d.purchases.forEach(x=>{if(typeof x.vat==='string'){x.vno=x.vat;x.vat=r2((x.items||[]).reduce((a,i)=>a+(+i.vat||0),0))}});
   d.jseq=d.jseq||0;d.pseq=d.pseq||0;
   d.st=Object.assign({seq:{},closed:[],docs:[],xf:[],po:[],cats:[],bprice:{},bbc:{},plog:[],reps:[],targets:{},eod:[],open:{status:'draft',lines:{}},sheets:[]},d.st||{});
-  d.cash=d.cash||[];d.cashLast=d.cashLast||{};d.cashVoid=d.cashVoid||{};d.cashLog=d.cashLog||[];
+  d.cash=d.cash||[];d.cashLast=d.cashLast||{};d.cashVoid=d.cashVoid||{};d.cashLog=d.cashLog||[];cnFix();
   if(!d.st.br5&&d.cfg&&d.cfg.cc){d.st.br5=1;['Branch 1','Branch 2','Branch 3','Branch 4','Branch 5'].forEach(n=>{if(!d.cfg.cc.includes(n))d.cfg.cc.push(n)})}
   d.nseq=Object.assign({dn:0,cn:0},d.nseq||{});d.vseq=Object.assign({rv:0,pv:0,rrv:0,rpv:0},d.vseq||{});
   d.products.forEach(p=>{if(!p.tax)p.tax=d.cfg.defTax;if(p.sub===undefined)p.sub=SUBMAP[p.name]||''});
