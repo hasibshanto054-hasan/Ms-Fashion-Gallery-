@@ -31,7 +31,7 @@ nav button{flex:1;padding:12px 4px;border:0;background:none;font-size:13px;color
 .login{max-width:380px;margin:12vh auto 0;padding:16px}.login h2{text-align:center;color:var(--pri)}
 @media print{body *{visibility:hidden}#rc,#rc *{visibility:visible}#rc{position:absolute;left:0;top:0;width:72mm}header,nav,.toast{display:none}}
 </style></head><body>
-<div id="app"></div><div id="modal"></div>
+<div id="app"></div><div id="modal"></div><div id="modal2"></div>
 <script>
 const $=s=>document.querySelector(s),LS=localStorage;
 const bn=n=>String(n).replace(/\d/g,d=>'০১২৩৪৫৬৭৮৯'[d]);
@@ -146,6 +146,16 @@ async function shareR(k){
   try{if(navigator.share)await navigator.share({text:t});else{await navigator.clipboard.writeText(t);toast('কপি হয়েছে')}}catch(e){}
 }
 async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(t)));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+function eye(id){const e=document.getElementById(id);if(e)e.type=e.type==='password'?'text':'password'}
+function pinAsk(msg){return new Promise(res=>{
+  window._pr=res;
+  $('#modal2').innerHTML=`<div class="mask" style="z-index:70;align-items:center"><div class="sheet" style="border-radius:18px;width:92%"><b>🔐 ${esc(msg)}</b>
+  <div class="row" style="margin-top:10px"><input class="inp" id="pinin" type="password" autocomplete="off" autocapitalize="none" onkeydown="if(event.key==='Enter')pinOk()"><button class="btn g fx" style="width:56px;padding:12px 0" onclick="eye('pinin')">👁</button></div>
+  <div class="row" style="margin-top:10px"><button class="btn g" onclick="pinNo()">বাতিল</button><button class="btn ok" onclick="pinOk()">ঠিক আছে</button></div></div></div>`;
+  setTimeout(()=>{const e=$('#pinin');if(e)e.focus()},50);
+})}
+function pinOk(){const v=$('#pinin').value;$('#modal2').innerHTML='';window._pr(v)}
+function pinNo(){$('#modal2').innerHTML='';window._pr(null)}
 let RV=null;
 function voidAsk(k){
   const s=SL.find(x=>x.k===k);if(!s||s.void)return;
@@ -168,7 +178,7 @@ async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncod
 async function rvGo(){
   const s=SL.find(x=>x.k===RV.k);if(!s)return;
   if(!RV.r.some(x=>x>0))return toast('কোন পণ্য ফেরত তা বেছে নিন');
-  const v=prompt('ম্যানেজার পিন দিন');if(v===null)return;
+  const v=await pinAsk('ম্যানেজার পিন দিন');if(v===null)return;
   if(await sha(v.trim())!==CAT.pinH)return toast('❌ ভুল পিন');
   const full=s.items.every((i,ix)=>RV.r[ix]>=i.uq),inQ=Q.findIndex(x=>x.k===s.k);
   if(full){
@@ -223,7 +233,7 @@ function vToday(){
   ${Q.length?`<button class="btn" style="margin-top:8px" onclick="flush()">🔄 এখনই পাঠান</button>`:''}</div>
   <button class="btn g" onclick="if(confirm('লগআউট করবেন?'))logout()">🚪 লগআউট</button>`;
 }
-function vLogin(){return `<div class="login card"><h2>🧑‍💼 ক্যাশিয়ার লগইন</h2><label>আইডি</label><input class="inp" id="lu" autocapitalize="none" autocomplete="username"><label>পাসওয়ার্ড</label><input class="inp" id="lp" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()"><button class="btn" style="margin-top:14px" onclick="login()">লগইন</button>${CLOUD.dbUrl?'':'<p style="color:var(--bad)">cloud.json পাওয়া যায়নি</p>'}</div>`}
+function vLogin(){return `<div class="login card"><h2>🧑‍💼 ক্যাশিয়ার লগইন</h2><label>আইডি</label><input class="inp" id="lu" autocapitalize="none" autocomplete="username"><label>পাসওয়ার্ড</label><div class="row"><input class="inp" id="lp" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()"><button class="btn g fx" style="width:56px;padding:12px 0" onclick="eye('lp')">👁</button></div><button class="btn" style="margin-top:14px" onclick="login()">লগইন</button>${CLOUD.dbUrl?'':'<p style="color:var(--bad)">cloud.json পাওয়া যায়নি</p>'}</div>`}
 function render(){
   const a=$('#app');
   if(!ME){a.innerHTML=vLogin();return}
