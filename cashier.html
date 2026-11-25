@@ -106,9 +106,10 @@ function add(code,fromSearch){
 function qty(i,d){cart[i].qty+=d;if(cart[i].qty<=0)cart.splice(i,1);render()}
 function price(i,v){cart[i].price=+v||0;render()}
 const sub=()=>r2(sum(cart,c=>c.qty*c.price));
+function scanBtn(){const el=$('#scan');const v=el.value.trim();el.value='';if(v)add(v);else toast('বারকোড নম্বর লিখুন')}
 function scanKey(e){if(e.key==='Enter'){const v=e.target.value.trim();e.target.value='';if(v)add(v)}}
 function srchIn(v){srch=v;const el=$('#sr');if(el)el.innerHTML=srHtml()}
-const srHtml=()=>search(srch).map(p=>`<div onclick="add(${p.i},1)"><span>${esc(p.n)}<br><small style="color:var(--mut)">স্টক ${bn(stockOf(p))}</small></span><b>${tk(bp(p)[0])}</b></div>`).join('');
+const srHtml=()=>!srch.trim()?'':(search(srch).length?'':'<div style="color:var(--mut)">কিছু পাওয়া যায়নি</div>')+search(srch).map(p=>`<div onclick="add(${p.i},1)"><span>${esc(p.n)}<br><small style="color:var(--mut)">স্টক ${bn(stockOf(p))}</small></span><b>${tk(bp(p)[0])}</b></div>`).join('');
 
 /* ---- sale ---- */
 function done(){
@@ -137,7 +138,12 @@ function rcpt(k){
   const h=`<div class="rcpt" id="rc"><div style="text-align:center"><b>${esc(CAT?CAT.shop:'')}</b>${CAT&&CAT.addr?'<br>'+esc(CAT.addr):''}${CAT&&CAT.vat?'<br>VAT: '+esc(CAT.vat):''}<br>বিল ${esc(s.no)}<br>${fdt(s.t)}<br>ক্যাশিয়ার: ${esc(s.name)}</div><hr>
   ${s.items.map(i=>`<div>${esc(i.n)}${i.un?' — '+bn(i.uq)+' '+esc(i.un)+' (×'+bn(i.f)+')':''}</div><div class="r"><span>${bn(i.qty)} × ${bn(r2(i.price))}</span><span>${bn(r2(i.qty*i.price))}</span></div>`).join('')}<hr>
   ${s.disc?`<div class="r"><span>ডিসকাউন্ট</span><span>-${bn(s.disc)}</span></div>`:''}<div class="r"><b>মোট</b><b>${tk(s.total)}</b></div><div class="r"><span>পেমেন্ট</span><span>${m[s.method]||s.method}</span></div>${s.cust?`<div class="r"><span>কাস্টমার</span><span>${esc(s.cust)}</span></div>`:''}<hr><div style="text-align:center">ধন্যবাদ! আবার আসবেন 😊</div></div>`;
-  $('#modal').innerHTML=`<div class="mask" onclick="if(event.target===this)closeM()"><div class="sheet"><div style="background:#fff;padding:6px">${h}</div><div class="row" style="margin-top:12px"><button class="btn" onclick="window.print()">🖨️ প্রিন্ট</button><button class="btn g" onclick="closeM()">বন্ধ</button></div></div></div>`;
+  $('#modal').innerHTML=`<div class="mask" onclick="if(event.target===this)closeM()"><div class="sheet"><div style="background:#fff;padding:6px">${h}</div><div class="row" style="margin-top:12px"><button class="btn" onclick="window.print()">🖨️ প্রিন্ট</button><button class="btn ok" onclick="shareR('${s.k}')">📤 শেয়ার</button></div><button class="btn g" style="margin-top:8px" onclick="closeM()">বন্ধ</button></div></div>`;
+}
+async function shareR(k){
+  const s=SL.find(x=>x.k===k);if(!s)return;
+  const t=(CAT?CAT.shop:'')+'\nবিল '+s.no+' · '+fdt(s.t)+'\n'+s.items.map(i=>i.n+(i.un?' — '+i.uq+' '+i.un:'')+'\n  '+i.qty+' × '+r2(i.price)+' = '+r2(i.qty*i.price)).join('\n')+(s.disc?'\nডিসকাউন্ট: -'+s.disc:'')+'\nমোট: ৳'+s.total+'\nধন্যবাদ!';
+  try{if(navigator.share)await navigator.share({text:t});else{await navigator.clipboard.writeText(t);toast('কপি হয়েছে')}}catch(e){}
 }
 const closeM=()=>{$('#modal').innerHTML=''};
 
@@ -160,7 +166,7 @@ const hdHtml=()=>`<div style="flex:1"><b>${esc(ME.name)}</b><small>${esc(ME.br)}
 function vSell(){
   const sb=sub(),disc=Math.min(+pay.disc||0,sb);
   const ms=[['cash','নগদ'],['bkash','bKash'],['nagad','Nagad'],['card','কার্ড'],['due','বাকি']];
-  return `<div class="card"><div class="row"><input class="inp" id="scan" inputmode="numeric" placeholder="বারকোড স্ক্যান / নম্বর" onkeydown="scanKey(event)"><button class="btn g fx" style="width:64px" onclick="cam()">📷</button></div>
+  return `<div class="card"><div class="row"><input class="inp" id="scan" enterkeyhint="go" autocomplete="off" placeholder="বারকোড স্ক্যান / নম্বর" onkeydown="scanKey(event)"><button class="btn ok fx" style="width:56px;padding:14px 0" onclick="scanBtn()">＋</button><button class="btn g fx" style="width:56px;padding:14px 0" onclick="cam()">📷</button></div>
   <input class="inp" style="margin-top:8px" placeholder="🔍 নাম দিয়ে খুঁজুন" value="${esc(srch)}" oninput="srchIn(this.value)"><div class="res" id="sr" style="${srch?'':'display:none'}">${srHtml()}</div></div>
   <div class="card">${cart.length?cart.map((c,i)=>`<div class="ci"><div class="m"><b>${esc(c.name)}</b>${c.un?` <span class="pill">${esc(c.un)} ×${bn(c.f)}</span>`:''}<br><input class="inp" type="number" inputmode="decimal" style="width:90px;padding:6px;margin-top:4px" value="${c.price}" onchange="price(${i},this.value)"></div><div class="q"><button onclick="qty(${i},-1)">−</button>${bn(c.qty)}<button onclick="qty(${i},1)">+</button></div></div>`).join(''):'<div style="text-align:center;color:var(--mut);padding:20px">বিল খালি — বারকোড স্ক্যান করুন</div>'}</div>
   <div class="card"><div class="row"><div><label style="margin-top:0">ডিসকাউন্ট (৳)</label><input class="inp" type="number" inputmode="decimal" value="${pay.disc||''}" onchange="pay.disc=+this.value||0;render()"></div><div><label style="margin-top:0">পেমেন্ট</label><select onchange="pay.method=this.value;render()">${ms.map(m=>`<option value="${m[0]}" ${pay.method===m[0]?'selected':''}>${m[1]}</option>`).join('')}</select></div></div>
