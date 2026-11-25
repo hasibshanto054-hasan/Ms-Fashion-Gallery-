@@ -74,7 +74,7 @@ const sod=t=>{const d=new Date(t);d.setHours(0,0,0,0);return d.getTime()};
 /* ---- catalog ---- */
 const P=id=>CAT&&CAT.products.find(p=>p.i===id);
 function bp(p){const b=(p.b||{})[br()]||(p.b||{})[CAT.main]||[0,0];return b}
-function stockOf(p){let s=bp(p)[1];const v=CAT.v||0;SL.concat(Q.filter(q=>!SL.some(x=>x.k===q.k))).forEach(x=>{if(x.t>v)x.items.forEach(i=>{if(i.pid===p.i)s-=i.qty})});return s}
+function stockOf(p){let s=bp(p)[1];const v=CAT.v||0;SL.forEach(x=>{if(x.t>v&&!x.void)x.items.forEach(i=>{if(i.pid===p.i)s-=i.qty})});return s}
 function findCode(c){
   c=String(c).trim();if(!c||!CAT)return null;
   const p=CAT.products.find(p=>(p.k||[]).includes(c));if(!p)return null;
@@ -128,7 +128,7 @@ let SEQ=0;
 async function flush(){
   if(busy||!ME||!Q.length)return;busy=true;
   try{
-    while(Q.length){const s=Q[0];s.at=s.at||s.t;await dbPut('cashierSales/'+ME.uid+'/'+s.k,{t:s.t,at:Date.now(),no:s.no,items:s.items,disc:s.disc,method:s.method,cust:s.cust,phone:s.phone,total:s.total,name:s.name,br:s.br});
+    while(Q.length){const s=Q[0];s.at=s.at||s.t;await dbPut('cashierSales/'+ME.uid+'/'+s.k,Object.assign({t:s.t,at:Date.now(),no:s.no,items:s.items,disc:s.disc,method:s.method,cust:s.cust,phone:s.phone,total:s.total,name:s.name,br:s.br},s.vk?{void:s.vk}:{}));
       Q.shift();const x=SL.find(z=>z.k===s.k);if(x)x.sent=1;save();online=true}
   }catch(e){online=false;if(e.fatal)logout(true)}
   busy=false;hdr();if(tabN==='today')render();
@@ -144,6 +144,18 @@ async function shareR(k){
   const s=SL.find(x=>x.k===k);if(!s)return;
   const t=(CAT?CAT.shop:'')+'\nবিল '+s.no+' · '+fdt(s.t)+'\n'+s.items.map(i=>i.n+(i.un?' — '+i.uq+' '+i.un:'')+'\n  '+i.qty+' × '+r2(i.price)+' = '+r2(i.qty*i.price)).join('\n')+(s.disc?'\nডিসকাউন্ট: -'+s.disc:'')+'\nমোট: ৳'+s.total+'\nধন্যবাদ!';
   try{if(navigator.share)await navigator.share({text:t});else{await navigator.clipboard.writeText(t);toast('কপি হয়েছে')}}catch(e){}
+}
+async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(t)));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+async function voidAsk(k){
+  const s=SL.find(x=>x.k===k);if(!s||s.void)return;
+  if(!CAT||!CAT.pinH)return toast('মালিক ক্যানসেল পিন সেট করেননি');
+  const v=prompt('বিল '+s.no+' ('+tk(s.total)+') ক্যানসেল করতে ম্যানেজার পিন দিন');if(v===null)return;
+  if(await sha(v.trim())!==CAT.pinH)return toast('❌ ভুল পিন');
+  s.void=1;
+  const qi=Q.findIndex(x=>x.k===s.k);
+  if(qi>=0)Q.splice(qi,1);
+  else Q.push({k:s.k+'-X',vk:s.k,no:s.no,t:Date.now(),at:Date.now(),name:s.name,br:s.br,items:s.items,disc:0,method:'void',cust:'',phone:'',total:s.total});
+  save();render();toast('✅ বিল ক্যানসেল হয়েছে');flush();
 }
 const closeM=()=>{$('#modal').innerHTML=''};
 
@@ -175,11 +187,12 @@ function vSell(){
   <button class="btn ok" style="margin-top:8px" onclick="done()">✓ বিক্রি সম্পন্ন</button>${cart.length?`<button class="btn g" style="margin-top:8px" onclick="cart=[];render()">বিল বাতিল</button>`:''}</div>`;
 }
 function vToday(){
-  const d0=sod(Date.now()),T=SL.filter(s=>s.t>=d0),m={cash:'নগদ',bkash:'bKash',nagad:'Nagad',card:'কার্ড',due:'বাকি'};
+  const d0=sod(Date.now()),T=SL.filter(s=>s.t>=d0&&!s.void),V=SL.filter(s=>s.t>=d0&&s.void),m={cash:'নগদ',bkash:'bKash',nagad:'Nagad',card:'কার্ড',due:'বাকি'};
   const by={};T.forEach(s=>by[s.method]=r2((by[s.method]||0)+s.total));
   return `<div class="card"><div class="tot b"><span>আজকের বিক্রি</span><span>${tk(sum(T,s=>s.total))}</span></div><div class="tot"><span>বিল</span><span>${bn(T.length)}টি</span></div>
   ${Object.keys(by).map(k=>`<div class="tot"><span>${m[k]||k}</span><span>${tk(by[k])}</span></div>`).join('')}</div>
-  <div class="card">${T.map(s=>`<div class="ci"><div class="m"><b>${esc(s.no)}</b> <small>${fdt(s.t)}</small><br><small>${s.sent?'✅ পাঠানো হয়েছে':'⏳ পাঠানো বাকি'} · ${m[s.method]||s.method}</small></div><b>${tk(s.total)}</b><button class="btn g sm" onclick="rcpt('${s.k}')">🖨️</button></div>`).join('')||'<div style="text-align:center;color:var(--mut);padding:16px">আজ এখনো বিক্রি নেই</div>'}
+  <div class="card">${T.map(s=>`<div class="ci"><div class="m"><b>${esc(s.no)}</b> <small>${fdt(s.t)}</small><br><small>${s.sent?'✅ পাঠানো হয়েছে':'⏳ পাঠানো বাকি'} · ${m[s.method]||s.method}</small></div><b>${tk(s.total)}</b><button class="btn g sm" onclick="rcpt('${s.k}')">🖨️</button><button class="btn g sm" style="color:var(--bad)" onclick="voidAsk('${s.k}')">❌</button></div>`).join('')||'<div style="text-align:center;color:var(--mut);padding:16px">আজ এখনো বিক্রি নেই</div>'}
+  ${V.length?`<div style="margin-top:8px;color:var(--mut)">❌ ক্যানসেল: ${V.map(s=>esc(s.no)+' ('+tk(s.total)+')').join(', ')}</div>`:''}
   ${Q.length?`<button class="btn" style="margin-top:8px" onclick="flush()">🔄 এখনই পাঠান</button>`:''}</div>
   <button class="btn g" onclick="if(confirm('লগআউট করবেন?'))logout()">🚪 লগআউট</button>`;
 }
