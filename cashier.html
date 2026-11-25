@@ -128,7 +128,7 @@ let SEQ=0;
 async function flush(){
   if(busy||!ME||!Q.length)return;busy=true;
   try{
-    while(Q.length){const s=Q[0];s.at=s.at||s.t;await dbPut('cashierSales/'+ME.uid+'/'+s.k,Object.assign({t:s.t,at:Date.now(),no:s.no,items:s.items,disc:s.disc,method:s.method,cust:s.cust,phone:s.phone,total:s.total,name:s.name,br:s.br},s.vk?{void:s.vk}:{}));
+    while(Q.length){const s=Q[0];s.at=s.at||s.t;await dbPut('cashierSales/'+ME.uid+'/'+s.k,Object.assign({t:s.t,at:Date.now(),no:s.no,items:s.items,disc:s.disc,method:s.method,cust:s.cust,phone:s.phone,total:s.total,name:s.name,br:s.br},s.vk?{void:s.vk}:{},s.ret?{ret:s.ret}:{}));
       Q.shift();const x=SL.find(z=>z.k===s.k);if(x)x.sent=1;save();online=true}
   }catch(e){online=false;if(e.fatal)logout(true)}
   busy=false;hdr();if(tabN==='today')render();
@@ -146,16 +146,43 @@ async function shareR(k){
   try{if(navigator.share)await navigator.share({text:t});else{await navigator.clipboard.writeText(t);toast('কপি হয়েছে')}}catch(e){}
 }
 async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(t)));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
-async function voidAsk(k){
+let RV=null;
+function voidAsk(k){
   const s=SL.find(x=>x.k===k);if(!s||s.void)return;
   if(!CAT||!CAT.pinH)return toast('মালিক ক্যানসেল পিন সেট করেননি');
-  const v=prompt('বিল '+s.no+' ('+tk(s.total)+') ক্যানসেল করতে ম্যানেজার পিন দিন');if(v===null)return;
+  RV={k,r:s.items.map(()=>0)};voidUi();
+}
+function voidUi(){
+  const s=SL.find(x=>x.k===RV.k);if(!s)return;
+  const val=sum(s.items,(i,ix)=>RV.r[ix]*i.f*i.price);
+  $('#modal').innerHTML=`<div class="mask" onclick="if(event.target===this){RV=null;closeM()}"><div class="sheet"><b>❌ ${esc(s.no)} — কোন পণ্য ফেরত / ক্যানসেল?</b>
+  <div style="color:var(--mut);font-size:12px;margin:4px 0">যেটা ফেরত দেবে তার সংখ্যা + দিয়ে বাড়ান</div>
+  ${s.items.map((i,ix)=>`<div class="ci"><div class="m"><b>${esc(i.n)}</b>${i.un?` <span class="pill">${esc(i.un)} ×${bn(i.f)}</span>`:''}<br><small>বিলে ${bn(i.uq)} · ${tk(i.f*i.price)} প্রতিটি</small></div><div class="q"><button onclick="rvq(${ix},-1)">−</button>${bn(RV.r[ix])}<button onclick="rvq(${ix},1)">+</button></div></div>`).join('')}
+  <div class="tot b" style="margin-top:6px"><span>ফেরত</span><span>${tk(val)}</span></div>
+  <div class="row" style="margin-top:8px"><button class="btn g" onclick="rvAll()">সব ক্যানসেল</button><button class="btn ok" onclick="rvGo()">✓ নিশ্চিত করুন</button></div>
+  <button class="btn g" style="margin-top:8px" onclick="RV=null;closeM()">বন্ধ</button></div></div>`;
+}
+function rvq(ix,d){const s=SL.find(x=>x.k===RV.k),m=s.items[ix].uq;RV.r[ix]=Math.max(0,Math.min(m,RV.r[ix]+d));voidUi()}
+function rvAll(){const s=SL.find(x=>x.k===RV.k);RV.r=s.items.map(i=>i.uq);voidUi()}
+async function sha(t){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(String(t)));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+async function rvGo(){
+  const s=SL.find(x=>x.k===RV.k);if(!s)return;
+  if(!RV.r.some(x=>x>0))return toast('কোন পণ্য ফেরত তা বেছে নিন');
+  const v=prompt('ম্যানেজার পিন দিন');if(v===null)return;
   if(await sha(v.trim())!==CAT.pinH)return toast('❌ ভুল পিন');
-  s.void=1;
-  const qi=Q.findIndex(x=>x.k===s.k);
-  if(qi>=0)Q.splice(qi,1);
-  else Q.push({k:s.k+'-X',vk:s.k,no:s.no,t:Date.now(),at:Date.now(),name:s.name,br:s.br,items:s.items,disc:0,method:'void',cust:'',phone:'',total:s.total});
-  save();render();toast('✅ বিল ক্যানসেল হয়েছে');flush();
+  const full=s.items.every((i,ix)=>RV.r[ix]>=i.uq),inQ=Q.findIndex(x=>x.k===s.k);
+  if(full){
+    s.void=1;
+    if(inQ>=0)Q.splice(inQ,1);else Q.push({k:s.k+'-X',vk:s.k,no:s.no,t:Date.now(),at:Date.now(),name:s.name,br:s.br,items:s.items,disc:0,method:'void',cust:'',phone:'',total:s.total});
+  }else{
+    const ret=[];s.items.forEach((i,ix)=>{if(RV.r[ix]>0)ret.push({pid:i.pid,qty:RV.r[ix]*i.f})});
+    const oldSub=sum(s.items,i=>i.qty*i.price);
+    s.items.forEach((i,ix)=>{const r=RV.r[ix];i.uq-=r;i.qty-=r*i.f});
+    s.items=s.items.filter(i=>i.qty>0);
+    const ns=sum(s.items,i=>i.qty*i.price);s.disc=oldSub>0?r2(s.disc*ns/oldSub):0;s.total=r2(ns-s.disc);s.part=1;
+    if(inQ<0)Q.push({k:s.k+'-R'+Date.now().toString(36),vk:s.k,ret,no:s.no,t:Date.now(),at:Date.now(),name:s.name,br:s.br,items:ret.map(r=>({pid:r.pid,qty:r.qty,price:0,n:''})),disc:0,method:'void',cust:'',phone:'',total:0});
+  }
+  RV=null;save();closeM();render();toast('✅ হয়েছে');flush();
 }
 const closeM=()=>{$('#modal').innerHTML=''};
 
