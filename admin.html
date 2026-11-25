@@ -433,6 +433,39 @@ async function cashPinSave(){
   const v=$('#cs_pin').value.trim();if(v.length<4)return toast('পিন কমপক্ষে ৪ অক্ষর');
   D.set.cashPin=v;D.set.cashPinH=await sha256(v);sv();render();toast('✅ ক্যানসেল পিন সেট হয়েছে');
 }
+function cashRange(){
+  const p=$('#rp_p').value,now=new Date(),d0=sod(Date.now());
+  if(p==='td')return[d0,Infinity,'আজ — '+now.toLocaleDateString('bn-BD')];
+  if(p==='yd')return[d0-864e5,d0,'গতকাল'];
+  if(p==='mo')return[new Date(now.getFullYear(),now.getMonth(),1).getTime(),Infinity,'এই মাস'];
+  return[0,Infinity,'সব সময়'];
+}
+const MET={cash:'নগদ',bkash:'bKash',nagad:'Nagad',card:'কার্ড',due:'বাকি'};
+function cashRepSales(){
+  const u=$('#rp_c').value,[a,b,lab]=cashRange(),cn=u?((D.cash.find(c=>c.user===u)||{}).name||u):'সব ক্যাশিয়ার';
+  const S=D.sales.filter(x=>x.cashier&&(!u||x.cashier===u)&&x.t>=a&&x.t<b).sort((x,y)=>x.t-y.t);
+  if(!S.length)return toast('এই সময়ে কোনো বিল নেই');
+  const th='style="border:1px solid #999;padding:3px 4px;text-align:left"',td='style="border:1px solid #999;padding:3px 4px"';
+  const h=`<div style="padding:10px;font-size:12px;font-family:system-ui,sans-serif"><h3 style="margin:0">${shopH()}</h3><b>ক্যাশিয়ার বিক্রয় ইনভয়েস রিপোর্ট</b><br>${esc(cn)} · ${esc(lab)}<hr>
+  ${S.map(x=>`<div style="margin:8px 0;page-break-inside:avoid"><b>বিল #${esc(x.id)}</b> ${x.cno?'('+esc(x.cno)+')':''} · ${fdt(x.t)} · ${esc(x.cname||'')} · ${esc(MET[x.method]||x.method)}${x.cust?' · '+esc(x.cust):''}
+  <table style="width:100%;border-collapse:collapse;margin-top:3px"><tr><th ${th}>পণ্য</th><th ${th}>বারকোড</th><th ${th}>সংখ্যা</th><th ${th}>দাম</th><th ${th}>মোট</th></tr>
+  ${x.items.map(i=>`<tr><td ${td}>${esc(i.name)}</td><td ${td}>${esc(i.code||'')}</td><td ${td}>${bn(i.qty)}</td><td ${td}>${bn(r2(i.price))}</td><td ${td}>${bn(r2(i.qty*i.price))}</td></tr>`).join('')}
+  ${x.disc?`<tr><td ${td} colspan="4">ডিসকাউন্ট</td><td ${td}>-${bn(x.disc)}</td></tr>`:''}<tr><td ${td} colspan="4"><b>বিল মোট</b></td><td ${td}><b>${bn(x.total)}</b></td></tr></table></div>`).join('')}
+  <hr><b>মোট বিল: ${bn(S.length)}টি · মোট বিক্রি: ${tk(sum(S,x=>x.total))}</b></div>`;
+  printArea(h,'cashier-sales');
+}
+function cashRepCancel(){
+  const u=$('#rp_c').value,[a,b,lab]=cashRange(),cn=u?((D.cash.find(c=>c.user===u)||{}).name||u):'সব ক্যাশিয়ার';
+  const L=(D.cashLog||[]).filter(l=>(!u||(D.cash.find(c=>c.name===l.cname)||{}).user===u)&&l.t>=a&&l.t<b).sort((x,y)=>x.t-y.t);
+  if(!L.length)return toast('এই সময়ে কোনো ক্যানসেল নেই');
+  const th='style="border:1px solid #999;padding:3px 4px;text-align:left"',td='style="border:1px solid #999;padding:3px 4px"';
+  const rows=[];L.forEach(l=>(l.li&&l.li.length?l.li:[{n:'বিল '+(l.no||''),c:'',q:'',v:l.total}]).forEach(i=>rows.push([l,i])));
+  const h=`<div style="padding:10px;font-size:12px;font-family:system-ui,sans-serif"><h3 style="margin:0">${shopH()}</h3><b>ক্যানসেল / ফেরত পণ্যের রিপোর্ট</b><br>${esc(cn)} · ${esc(lab)}<hr>
+  <table style="width:100%;border-collapse:collapse"><tr><th ${th}>সময়</th><th ${th}>ক্যাশিয়ার</th><th ${th}>ধরন</th><th ${th}>পণ্য</th><th ${th}>বারকোড</th><th ${th}>সংখ্যা</th><th ${th}>টাকা</th></tr>
+  ${rows.map(([l,i])=>`<tr><td ${td}>${fdt(l.t)}</td><td ${td}>${esc(l.cname)}</td><td ${td}>${l.part?'আংশিক':'পুরো বিল'}</td><td ${td}>${esc(i.n)}</td><td ${td}>${esc(i.c||'')}</td><td ${td}>${i.q===''?'':bn(i.q)}</td><td ${td}>${bn(r2(i.v))}</td></tr>`).join('')}</table>
+  <hr><b>মোট ক্যানসেল / ফেরত: ${tk(sum(rows,r=>+r[1].v||0))}</b></div>`;
+  printArea(h,'cashier-cancels');
+}
 function cashLink(){return location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/,'')+'cashier.html'}
 function vCash(){
   const C=D.cash||[],d0=sod(Date.now()),m0=new Date(new Date().getFullYear(),new Date().getMonth(),1).getTime();
@@ -443,12 +476,18 @@ function vCash(){
   <small style="color:var(--mut)">ক্যাশিয়ার এই লিংক ফোনে খুলে "Add to Home Screen" করবে। তার বিক্রি ১৫ সেকেন্ডের মধ্যে এখানে স্টক ও হিসাবে যোগ হয়।${cloudOn()?'':' ⚠️ ক্লাউড সিঙ্ক বন্ধ — চালু না হলে ক্যাশিয়ার কাজ করবে না।'}</small></div>
   <div class="card"><b>🔐 বিল ক্যানসেল পিন</b><br><small style="color:var(--mut)">ক্যাশিয়ার বিল ক্যানসেল করতে চাইলে এই পিন লাগবে। পিন শুধু আপনি ও যাকে দেবেন সে জানবে।${D.set.cashPinH?' <b>বর্তমান পিন: '+esc(D.set.cashPin||'')+'</b>':' <b style="color:var(--bad)">এখনো সেট হয়নি — সেট না করলে ক্যানসেল করা যাবে না।</b>'}</small>
   <div class="row" style="margin-top:6px"><input class="inp" id="cs_pin" placeholder="নতুন পিন (৪+ অক্ষর)"><button class="btn sm ok fx" style="width:auto" onclick="cashPinSave()">সেভ</button></div></div>
+  <div class="card"><b>🖨️ রিপোর্ট প্রিন্ট / PDF</b>
+  <div class="row"><div><label>ক্যাশিয়ার</label><select class="inp" id="rp_c"><option value="">সবাই</option>${C.map(c=>`<option value="${esc(c.user)}">${esc(c.name)}</option>`).join('')}</select></div><div><label>সময়</label><select class="inp" id="rp_p"><option value="td">আজ</option><option value="yd">গতকাল</option><option value="mo">এই মাস</option><option value="all">সব</option></select></div></div>
+  <button class="btn" style="margin-top:8px" onclick="cashRepSales()">🧾 বিক্রয় ইনভয়েস রিপোর্ট</button><button class="btn g" style="margin-top:8px" onclick="cashRepCancel()">❌ ক্যানসেল / ফেরত রিপোর্ট</button></div>
   ${C.map((c,i)=>{const S=D.sales.filter(s=>s.cashier===c.user),td=S.filter(s=>s.t>=d0),mo=S.filter(s=>s.t>=m0);
     return `<div class="card" style="${c.active===false?'opacity:.6':''}"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><span class="pill">${c.active===false?'বন্ধ':'চালু'}</span></div>
     <small style="color:var(--mut)">আইডি: <b>${esc(c.user)}</b> · পাসওয়ার্ড: <b>${esc(c.pw)}</b></small>
     <label>ব্রাঞ্চ</label><select class="inp" onchange="cashBr(${i},this.value)">${brs().map(b=>`<option ${b===c.br?'selected':''}>${esc(b)}</option>`).join('')}</select>
     <div class="tot"><span>আজ</span><span>${bn(td.length)} বিল · ${tk(sum(td,s=>s.total))}</span></div><div class="tot"><span>এই মাস</span><span>${bn(mo.length)} বিল · ${tk(sum(mo,s=>s.total))}</span></div>
     <div class="row" style="margin-top:8px"><button class="btn sm g" onclick="cashName(${i})">✏️ নাম</button><button class="btn sm g" onclick="cashPw(${i})">🔑 পাসওয়ার্ড</button><button class="btn sm ${c.active===false?'ok':'g'}" onclick="cashTog(${i})">${c.active===false?'চালু করুন':'বন্ধ করুন'}</button></div></div>`}).join('')||'<div class="empty">এখনো কোনো ক্যাশিয়ার নেই</div>'}
+  ${D.sales.some(x=>x.cashier)?`<div class="card"><b>🧾 ক্যাশিয়ারের বিক্রি (সাম্প্রতিক)</b>${D.sales.filter(x=>x.cashier).slice(0,40).map(x=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><small style="color:var(--mut)">${fdt(x.t)} · ${esc(x.cname||x.cashier)} · ${esc(MLAB[x.method]||x.method)}</small>
+  ${x.items.map(i=>`<div class="tot"><span>${esc(String(i.name).replace(/ — .*$/,''))}${i.code?'<br><b style="font-family:monospace;letter-spacing:1px">'+esc(i.code)+'</b>':''} <small>× ${bn(i.qty)}</small></span><span>${tk(i.qty*i.price)}</span></div>`).join('')}
+  <div class="tot"><b>মোট${x.disc?' (ডিসকাউন্ট −'+bn(x.disc)+')':''}</b><b>${tk(x.total)}</b></div><button class="ib" onclick="receipt('${x.id}')">🖨️</button></div>`).join('')}</div>`:''}
   ${(D.cashLog||[]).length?`<div class="card"><b>❌ ক্যানসেল / ফেরত হওয়া পণ্য</b>${D.cashLog.slice(0,60).map(l=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><small style="color:var(--mut)">${fdt(l.t)} · ${esc(l.cname)}${l.part?' · <b>আংশিক ফেরত</b>':' · <b>পুরো বিল ক্যানসেল</b>'}</small>
   ${(l.li&&l.li.length?l.li:[{n:'বিল '+(l.no||''),c:'',q:'',v:l.total}]).map(i=>`<div class="tot"><span>${esc(i.n)}${i.c?'<br><b style="font-family:monospace;letter-spacing:1px">'+esc(i.c)+'</b>':''}${i.q!==''?' <small>× '+bn(i.q)+'</small>':''}</span><span>${tk(i.v)}</span></div>`).join('')}</div>`).join('')}</div>`:''}
   ${C.length<10?`<div class="card"><b>➕ নতুন ক্যাশিয়ার (${bn(C.length)}/১০)</b>
@@ -554,9 +593,10 @@ const docHead=(t,no,dt)=>`<div style="display:flex;justify-content:space-between
 const docSign=()=>`<div style="display:flex;justify-content:space-between;margin-top:46px;font-size:11px"><span style="border-top:1px solid #000;padding-top:3px">প্রস্তুতকারী</span><span style="border-top:1px solid #000;padding-top:3px">যাচাইকারী</span><span style="border-top:1px solid #000;padding-top:3px">অনুমোদন / গ্রাহকের স্বাক্ষর</span></div>`;
 const docTbl=(cols,rows)=>`<table border="1" cellpadding="5" style="border-collapse:collapse;width:100%;margin-top:6px;font-size:12px"><tr>${cols.map(c=>`<th style="background:#eee">${c}</th>`).join('')}</tr>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
 function docHtml(kind,id){
+  const bcl=i=>i.code?`<br><span style="font-family:monospace;font-size:10px">${esc(i.code)}</span>`:'';
   const W=b=>`<div style="padding:12px;font-size:12px;color:#000;font-family:system-ui,sans-serif">${b}</div>`;
   if(kind==='sale'){const s=D.sales.find(x=>x.id===id);if(!s)return '';
-    return W(docHead('ইনভয়েস / Sales Invoice',s.id,s.t)+`কাস্টমার: <b>${esc(s.cust||'ওয়াক-ইন')}</b> ${esc(s.phone||'')}${s.addr?'<br>ঠিকানা: '+esc(s.addr):''}`+docTbl(['#','পণ্য','পিস','দাম','মোট'],s.items.map((i,k)=>[k+1,esc(i.name),i.qty,r2(i.price),r2(i.qty*i.price)]))+
+    return W(docHead('ইনভয়েস / Sales Invoice',s.id,s.t)+`${s.cname?'ক্যাশিয়ার: '+esc(s.cname)+'<br>':''}কাস্টমার: <b>${esc(s.cust||'ওয়াক-ইন')}</b> ${esc(s.phone||'')}${s.addr?'<br>ঠিকানা: '+esc(s.addr):''}`+docTbl(['#','পণ্য','পিস','দাম','মোট'],s.items.map((i,k)=>[k+1,esc(i.name)+bcl(i),i.qty,r2(i.price),r2(i.qty*i.price)]))+
     `<div style="text-align:right;margin-top:8px">${s.disc?'ডিসকাউন্ট: -'+s.disc+'<br>':''}${s.fee?'ডেলিভারি: '+s.fee+'<br>':''}ভ্যাট (অন্তর্ভুক্ত): ${s.vat||0}<br><b style="font-size:15px">সর্বমোট: ${tk(s.total)}</b><br>পেমেন্ট: ${esc(MLAB[s.method]||s.method)}</div>`+docSign())}
   if(kind==='purchase'){const p=D.purchases.find(x=>x.id===id);if(!p)return '';
     return W(docHead('ক্রয় রশিদ / Purchase Receipt',p.id,p.t)+`সাপ্লায়ার: <b>${esc(p.supplier||'—')}</b>${p.vno||(D.suppliers.find(s=>s.name===p.supplier)||{}).vat?' · VAT No: '+esc(p.vno||D.suppliers.find(s=>s.name===p.supplier).vat):''}${p.inv?' · Inv: '+esc(p.inv):''}`+docTbl(['পণ্য','পিস','ক্রয়দাম','ভ্যাট','মোট'],(p.items||[p]).map(i=>[esc(i.name),i.qty,i.cost,i.vat||0,i.total]))+`<div style="text-align:right;margin-top:8px"><b>মোট: ${tk(p.total)}</b> · ${esc(MLAB[p.method]||p.method)}</div>${p.note?'<br>নোট: '+esc(p.note):''}`+docSign())}
@@ -1161,7 +1201,7 @@ function posDone(){
 function receipt(id){
   const s=D.sales.find(x=>x.id===id);if(!s)return;
   const h=`<div class="rcpt"><div style="text-align:center"><b>${shopH()}</b><br>বিল #${s.id}<br>${fdt(s.t)}</div><hr>
-  ${s.items.map(i=>`<div>${esc(i.name)}</div><div class="r"><span>${bn(i.qty)} × ${bn(r2(i.price))}</span><span>${bn(r2(i.qty*i.price))}</span></div>`).join('')}<hr>
+  ${s.items.map(i=>`<div>${esc(i.name)}</div>${i.code?`<div style="font-size:10px;font-family:monospace">${esc(i.code)}</div>`:''}<div class="r"><span>${bn(i.qty)} × ${bn(r2(i.price))}</span><span>${bn(r2(i.qty*i.price))}</span></div>`).join('')}<hr>
   ${s.disc?`<div class="r"><span>ডিসকাউন্ট</span><span>-${bn(s.disc)}</span></div>`:''}${s.fee?`<div class="r"><span>ডেলিভারি</span><span>${bn(s.fee)}</span></div>`:''}
   ${s.vat?`<div class="r"><span>ভ্যাট (মূল্যে অন্তর্ভুক্ত)</span><span>${bn(s.vat)}</span></div>`:''}<div class="r"><b>মোট</b><b>${tk(s.total)}</b></div><div class="r"><span>পেমেন্ট</span><span>${esc(s.method)}</span></div><hr><div style="text-align:center">ধন্যবাদ! আবার আসবেন 😊<br><small>বিক্রিত পণ্য ৩ দিনের মধ্যে রশিদসহ ফেরতযোগ্য</small></div></div>`;
   window._rc=h;
@@ -2755,7 +2795,7 @@ const SR={
  pa:(f,t)=>[sec('Monitoring Price Adjustment — দাম পরিবর্তনের রেকর্ড',['তারিখ ও সময়','পণ্য','ব্রাঞ্চ','পুরনো দাম','নতুন দাম','পার্থক্য','উৎস','ডক'],D.st.plog.filter(x=>inR(x.t,f,t)).map(x=>[fdt(x.t),x.name,x.br,x.old,x.nw,r2(x.nw-x.old),x.src,x.doc]))]
 };
 function vSR_(k,t,s){const [f,to]=range();return hint(t,s)+perBar()+rpt(SR[k](f,to))}
-function invHtml(s){return `<div style="page-break-after:always;padding:10px;font-size:12px"><h3 style="margin:0">${shopH()}</h3>Invoice #${s.id} · ${fdt(s.t)}<br>কাস্টমার: ${esc(s.cust||'ওয়াক-ইন')} ${esc(s.phone||'')}<table border="1" cellpadding="4" style="border-collapse:collapse;width:100%;margin-top:6px"><tr><th>পণ্য</th><th>পিস</th><th>দাম</th><th>মোট</th></tr>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${i.qty}</td><td>${i.price}</td><td>${r2(i.qty*i.price)}</td></tr>`).join('')}</table>${s.disc?'ডিসকাউন্ট: '+s.disc+'<br>':''}ভ্যাট (অন্তর্ভুক্ত): ${s.vat}<br><b>মোট: ${s.total}</b> · ${esc(MLAB[s.method]||s.method)}</div>`}
+function invHtml(s){return `<div style="page-break-after:always;padding:10px;font-size:12px"><h3 style="margin:0">${shopH()}</h3>Invoice #${s.id} · ${fdt(s.t)}<br>কাস্টমার: ${esc(s.cust||'ওয়াক-ইন')} ${esc(s.phone||'')}<table border="1" cellpadding="4" style="border-collapse:collapse;width:100%;margin-top:6px"><tr><th>পণ্য</th><th>পিস</th><th>দাম</th><th>মোট</th></tr>${s.items.map(i=>`<tr><td>${esc(i.name)}${i.code?'<br><span style="font-family:monospace;font-size:10px">'+esc(i.code)+'</span>':''}</td><td>${i.qty}</td><td>${i.price}</td><td>${r2(i.qty*i.price)}</td></tr>`).join('')}</table>${s.disc?'ডিসকাউন্ট: '+s.disc+'<br>':''}ভ্যাট (অন্তর্ভুক্ত): ${s.vat}<br><b>মোট: ${s.total}</b> · ${esc(MLAB[s.method]||s.method)}</div>`}
 function vPInv(){
   const [f,t]=range(),l=salesIn(f,t);
   return hint('Print Sales Invoices','নির্বাচিত সময়ের বিক্রয় ইনভয়েস প্রিন্ট করুন — একটি বা একসাথে সবগুলো।')+perBar()+`<div class="card"><button class="btn" ${l.length?'':'disabled'} onclick="printArea(salesIn(...range()).map(invHtml).join(''))">🖨️ সব ${bn(l.length)}টি প্রিন্ট করুন</button>${T(['বিল','তারিখ','কাস্টমার','মোট',''],l.slice(0,100).map(s=>[s.id,fdt(s.t),esc(s.cust||'—'),tk(s.total),`<button class="ib" onclick="printArea(invHtml(D.sales.find(x=>x.id==='${s.id}')))">🖨️</button>`]),'কোনো বিল নেই')}</div>`;
