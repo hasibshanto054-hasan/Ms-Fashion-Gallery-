@@ -345,11 +345,11 @@ function cashPost(c,k,x){
 let _cashBusy=false;
 function cashPart(c,o,x){
   const ret={};(Array.isArray(x.ret)?x.ret:Object.values(x.ret||{})).forEach(r=>{if(r)ret[r.pid]=(ret[r.pid]||0)+(+r.qty||0)});
-  const rows=[],names=[];let retV=0;
-  o.items.forEach(i=>{const rq=Math.min(+i.qty,ret[i.pid]||0);ret[i.pid]=Math.max(0,(ret[i.pid]||0)-rq);retV+=rq*i.price;const q=+i.qty-rq;if(q>0){rows.push({pid:i.pid,qty:q,price:+i.price,cost:i.cost});names.push(i.name)}});
+  const rows=[],names=[],li=[];let retV=0;
+  o.items.forEach(i=>{const rq=Math.min(+i.qty,ret[i.pid]||0);ret[i.pid]=Math.max(0,(ret[i.pid]||0)-rq);if(rq>0)li.push({n:String(i.name||'').replace(/ — .*$/,''),c:i.code||(P(i.pid)||{}).code||'',q:rq,v:r2(rq*i.price)});retV+=rq*i.price;const q=+i.qty-rq;if(q>0){rows.push({pid:i.pid,qty:q,price:+i.price,cost:i.cost});names.push(i.name)}});
   if(retV<=0)return false;
   D.cashLog=D.cashLog||[];
-  D.cashLog.unshift({t:+x.at||Date.now(),cname:c.name,no:x.no||'',id:o.id,total:r2(retV),part:1});
+  D.cashLog.unshift({t:+x.at||Date.now(),cname:c.name,no:x.no||'',id:o.id,total:r2(retV),part:1,li});
   const old={id:o.id,t:o.t,cust:o.cust,phone:o.phone,method:o.method,paidAt:o.paidAt,ck:o.ck,cashier:o.cashier,cname:o.cname,cno:o.cno,br:o.br,sub:o.sub,disc:o.disc};
   docReverse('sale',o);
   if(!rows.length)return true;
@@ -380,7 +380,7 @@ async function cashImport(manual){
         if(x.void){
           D.cashVoid=D.cashVoid||{};if(D.cashVoid[x.void])continue;D.cashVoid[x.void]=1;
           const o=D.sales.find(z=>z.ck===x.void);
-          D.cashLog=D.cashLog||[];D.cashLog.unshift({t:+x.at||Date.now(),cname:c.name,no:x.no||'',id:o?o.id:'',total:+x.total||0});
+          D.cashLog=D.cashLog||[];D.cashLog.unshift({t:+x.at||Date.now(),cname:c.name,no:x.no||'',id:o?o.id:'',total:+x.total||0,li:(o?o.items:x.items||[]).map(i=>({n:String(i.name||i.n||'').replace(/ — .*$/,''),c:i.code||(P(+i.pid)||{}).code||'',q:+i.qty,v:r2((+i.qty||0)*(+i.price||0))}))});
           if(o){docReverse('sale',o);n++}
           continue;
         }
@@ -449,7 +449,8 @@ function vCash(){
     <label>ব্রাঞ্চ</label><select class="inp" onchange="cashBr(${i},this.value)">${brs().map(b=>`<option ${b===c.br?'selected':''}>${esc(b)}</option>`).join('')}</select>
     <div class="tot"><span>আজ</span><span>${bn(td.length)} বিল · ${tk(sum(td,s=>s.total))}</span></div><div class="tot"><span>এই মাস</span><span>${bn(mo.length)} বিল · ${tk(sum(mo,s=>s.total))}</span></div>
     <div class="row" style="margin-top:8px"><button class="btn sm g" onclick="cashName(${i})">✏️ নাম</button><button class="btn sm g" onclick="cashPw(${i})">🔑 পাসওয়ার্ড</button><button class="btn sm ${c.active===false?'ok':'g'}" onclick="cashTog(${i})">${c.active===false?'চালু করুন':'বন্ধ করুন'}</button></div></div>`}).join('')||'<div class="empty">এখনো কোনো ক্যাশিয়ার নেই</div>'}
-  ${(D.cashLog||[]).length?`<div class="card"><b>❌ ক্যানসেল / ফেরত হওয়া বিল</b>${D.cashLog.slice(0,30).map(l=>`<div class="tot"><span>${esc(l.no)} ${l.id?'(#'+esc(l.id)+')':''} · ${esc(l.cname)}${l.part?' · <b>আংশিক ফেরত</b>':''}<br><small style="color:var(--mut)">${fdt(l.t)}</small></span><span>${tk(l.total)}</span></div>`).join('')}</div>`:''}
+  ${(D.cashLog||[]).length?`<div class="card"><b>❌ ক্যানসেল / ফেরত হওয়া পণ্য</b>${D.cashLog.slice(0,60).map(l=>`<div style="padding:6px 0;border-bottom:1px solid var(--bd)"><small style="color:var(--mut)">${fdt(l.t)} · ${esc(l.cname)}${l.part?' · <b>আংশিক ফেরত</b>':' · <b>পুরো বিল ক্যানসেল</b>'}</small>
+  ${(l.li&&l.li.length?l.li:[{n:'বিল '+(l.no||''),c:'',q:'',v:l.total}]).map(i=>`<div class="tot"><span>${esc(i.n)}${i.c?'<br><b style="font-family:monospace;letter-spacing:1px">'+esc(i.c)+'</b>':''}${i.q!==''?' <small>× '+bn(i.q)+'</small>':''}</span><span>${tk(i.v)}</span></div>`).join('')}</div>`).join('')}</div>`:''}
   ${C.length<10?`<div class="card"><b>➕ নতুন ক্যাশিয়ার (${bn(C.length)}/১০)</b>
   <label>নাম</label><input class="inp" id="cs_n"><label>লগইন আইডি (ইংরেজি, যেমন rahim1)</label><input class="inp" id="cs_u" autocapitalize="none"><label>পাসওয়ার্ড (কমপক্ষে ৬)</label><input class="inp" id="cs_p"><label>ব্রাঞ্চ</label><select class="inp" id="cs_b">${brs().map(b=>`<option>${esc(b)}</option>`).join('')}</select>
   <button class="btn ok" style="margin-top:8px" onclick="cashAdd()">✓ তৈরি করুন</button></div>`:''}`;
