@@ -247,7 +247,7 @@ function saveDB(d){let s='';try{s=JSON.stringify(d);LS.setItem(DBK,s)}catch(e){t
 /* ===== CLOUD (Firebase Realtime Database — REST) =====
    ⬇️ Firebase প্রজেক্ট খোলার পর শুধু এই লাইনে দুটি মান বসান (কাস্টমার ও অ্যাডমিন দুই অ্যাপেই একই মান) */
 const CLOUD={apiKey:'',dbUrl:''};
-try{if(!CLOUD.dbUrl){const x=new XMLHttpRequest();x.open('GET','cloud.json?'+Date.now(),false);x.send();if(x.status==200){const j=JSON.parse(x.responseText);if(j.apiKey)CLOUD.apiKey=j.apiKey;if(j.dbUrl)CLOUD.dbUrl=j.dbUrl}}}catch(e){}
+try{if(!CLOUD.dbUrl){const x=new XMLHttpRequest();x.open('GET','cloud.json?'+Date.now(),false);x.send();if(x.status==200){const j=JSON.parse(x.responseText);if(j.apiKey)CLOUD.apiKey=j.apiKey;if(j.dbUrl)CLOUD.dbUrl=j.dbUrl;if(j.authBase)CLOUD.authBase=j.authBase;if(j.tokBase)CLOUD.tokBase=j.tokBase}}}catch(e){}
 const cloudOn=()=>!!(CLOUD.apiKey&&CLOUD.dbUrl);
 const dbu=(path,tok,q)=>{const a=[];if(q)a.push(q);if(tok)a.push('auth='+encodeURIComponent(tok));return String(CLOUD.dbUrl).replace(/\/+$/,'')+'/'+path+'.json'+(a.length?'?'+a.join('&'):'')};
 async function dbGet(path,tok,q){const r=await fetch(dbu(path,tok,q),{cache:'no-store'});if(!r.ok)throw new Error('GET '+path+' '+r.status);return r.json()}
@@ -310,10 +310,114 @@ async function cloudPush(manual){
     }
     await dbPut('catalog',catalogObj(),tok);
     await dbPut('status',st,tok);
+    try{await dbPut('cashierCat',cashCatObj(),tok)}catch(e){}
     await dbPut('admin/db',{savedAt:D.savedAt||Date.now(),json:JSON.stringify(D)},tok);
     setSync('ok');if(manual)toast('☁️ কাস্টমার অ্যাপে পাবলিশ হয়েছে');
   }catch(e){setSync('err');if(manual)toast('❌ পাবলিশ হয়নি: '+e.message)}
 }
+/* ===== CASHIERS (alada cashier.html app) ===== */
+const cEmail=u=>String(u).toLowerCase()+'@cashier.msf';
+async function fbAuth(ep,body){
+  const base=CLOUD.authBase||'https://identitytoolkit.googleapis.com';
+  const r=await fetch(base+'/v1/accounts:'+ep+'?key='+encodeURIComponent(CLOUD.apiKey),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json();if(!r.ok)throw new Error((j.error&&j.error.message)||'error');return j;
+}
+function cashCatObj(){
+  const bs=brs(),M=MAIN();
+  const prods=D.products.filter(p=>!p.hidden).map(p=>{
+    const b={};bs.forEach(x=>{const v=((D.st.bprice||{})[p.id]||{})[x];b[x]=[v>0?v:eff(p),Math.max(0,atB(p,x))]});
+    const ks=[p.code].concat((p.units||[]).map(u=>u.bc),Object.values(((D.st&&D.st.bbc)||{})[p.id]||{})).filter(Boolean).map(String);
+    return{i:p.id,n:p.name,c:p.code||'',k:[...new Set(ks)],b,u:(p.units||[]).filter(u=>u.bc).map(u=>({n:u.n,f:+u.f||1,bc:String(u.bc),pr:+u.pr>0?+u.pr:0}))};
+  });
+  return{v:Date.now(),shop:D.set.shop||'',addr:D.set.addr||'',vat:D.set.vat||'',brs:bs,main:M,products:prods};
+}
+function cashPost(c,k,x){
+  const rows=[];(x.items||[]).forEach(z=>{const p=P(+z.pid);if(p&&+z.qty>0)rows.push({pid:p.id,qty:+z.qty,price:+z.price,un:z.un||'',uq:z.uq||0,f:z.f||1})});
+  if(!rows.length)return false;
+  const due=x.method==='due';D.billSeq=(D.billSeq||0)+1;
+  const s=buildSale(rows,+x.disc||0,0,x.method||'cash',{id:'B'+pad(D.billSeq),t:+x.t||Date.now(),src:'pos',cust:x.cust||'',phone:x.phone||'',paidAt:due?null:(+x.t||Date.now()),ck:k,cashier:c.user,cname:c.name,cno:x.no||'',br:c.br});
+  s.items.forEach((it,i)=>{if(rows[i].un)it.name+=' — '+rows[i].uq+' '+rows[i].un+' (×'+rows[i].f+')'});
+  s.paidAmt=due?0:s.total;
+  s.items.forEach(i=>{stockMove(i.pid,-i.qty,'sale','বিল #'+s.id+' ('+c.name+')',i.cost);bqAdj(P(i.pid),c.br,-i.qty)});
+  postSale(s,{cc:c.br||MAIN()});D.sales.unshift(s);return true;
+}
+let _cashBusy=false;
+async function cashImport(manual){
+  if(_cashBusy||!cloudOn()||!logged||!(D.cash||[]).some(c=>c.uid))return;
+  _cashBusy=true;
+  try{
+    const tok=await authTok();let n=0;D.cashLast=D.cashLast||{};
+    for(const c of D.cash){
+      if(!c.uid)continue;
+      const j=await dbGet('cashierSales/'+c.uid,tok,'orderBy=%22at%22&startAt='+Math.max(0,(D.cashLast[c.uid]||0)-600000))||{};
+      const ks=Object.keys(j).sort((a,b)=>(j[a].at||0)-(j[b].at||0));
+      for(const k of ks){
+        const x=j[k];if(!x||!x.items)continue;
+        x.items=Array.isArray(x.items)?x.items.filter(Boolean):Object.values(x.items);
+        if((+x.at||0)>(D.cashLast[c.uid]||0))D.cashLast[c.uid]=+x.at;
+        if(D.sales.some(s=>s.ck===k))continue;
+        if(cashPost(c,k,x))n++;
+      }
+    }
+    if(n){sv();toast('🧾 ক্যাশিয়ারের '+bn(n)+'টি নতুন বিল এসেছে');if(['cash','home','m_CS','eod','stock'].includes(tab))render()}
+    else if(manual)toast('নতুন কোনো বিল নেই');
+  }catch(e){if(manual)toast('❌ বিল আনা যায়নি: '+e.message)}
+  _cashBusy=false;
+}
+async function cashAdd(){
+  if(!cloudOn())return toast('আগে ক্লাউড সিঙ্ক চালু করুন');
+  if((D.cash||[]).length>=10)return toast('সর্বোচ্চ ১০ জন');
+  const nm=$('#cs_n').value.trim(),u=$('#cs_u').value.trim().toLowerCase(),pw=$('#cs_p').value,br=$('#cs_b').value;
+  if(!nm)return toast('নাম দিন');
+  if(!/^[a-z0-9]{3,15}$/.test(u))return toast('লগইন আইডি: ৩–১৫ অক্ষর, ইংরেজি ছোট হাতের অক্ষর/সংখ্যা (যেমন: rahim1)');
+  if(pw.length<6)return toast('পাসওয়ার্ড কমপক্ষে ৬ অক্ষর');
+  if(D.cash.some(c=>c.user===u))return toast('এই আইডি আছে');
+  try{
+    toast('অপেক্ষা করুন...');
+    const tok=await authTok();let uid;
+    try{uid=(await fbAuth('signUp',{email:cEmail(u),password:pw,returnSecureToken:true})).localId}
+    catch(e){if(/EMAIL_EXISTS/.test(e.message))return toast('এই আইডি আগে ব্যবহার হয়েছে — অন্য আইডি দিন');throw e}
+    await dbPut('cashiers/'+uid,{name:nm,user:u,br,active:true},tok);
+    D.cash.push({id:Date.now(),name:nm,user:u,pw,br,uid,active:true});sv();render();toast('✅ ক্যাশিয়ার তৈরি হয়েছে');
+  }catch(e){toast('❌ '+e.message+(/OPERATION_NOT_ALLOWED/.test(e.message)?' (Firebase এ Email/Password চালু করুন)':''))}
+}
+async function cashSave(i,patch){
+  const c=D.cash[i];Object.assign(c,patch);
+  try{const tok=await authTok();await dbPut('cashiers/'+c.uid,{name:c.name,user:c.user,br:c.br,active:c.active!==false},tok)}
+  catch(e){toast('❌ ক্লাউডে সেভ হয়নি: '+e.message)}
+  sv();render();
+}
+function cashTog(i){const c=D.cash[i];cashSave(i,{active:c.active===false})}
+function cashBr(i,v){cashSave(i,{br:v})}
+function cashName(i){const v=prompt('নতুন নাম',D.cash[i].name);if(v&&v.trim())cashSave(i,{name:v.trim()})}
+async function cashPw(i){
+  const c=D.cash[i],v=prompt('নতুন পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর) — '+c.name);if(v===null)return;
+  if(v.length<6)return toast('কমপক্ষে ৬ অক্ষর');
+  try{
+    const j=await fbAuth('signInWithPassword',{email:cEmail(c.user),password:c.pw,returnSecureToken:true});
+    await fbAuth('update',{idToken:j.idToken,password:v,returnSecureToken:false});
+    c.pw=v;sv();render();toast('✅ পাসওয়ার্ড বদলেছে');
+  }catch(e){toast('❌ '+e.message)}
+}
+function cashLink(){return location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/,'')+'cashier.html'}
+function vCash(){
+  const C=D.cash||[],d0=sod(Date.now()),m0=new Date(new Date().getFullYear(),new Date().getMonth(),1).getTime();
+  const lk=cashLink();
+  return `<h2 style="margin:6px 0 8px">🧑‍💼 Cashiers</h2>
+  <div class="card"><b>ক্যাশিয়ারের অ্যাপ লিংক</b><div style="margin:6px 0;word-break:break-all;direction:ltr;font-size:13px">${esc(lk)}</div>
+  <div class="row"><button class="btn sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(lk)}');toast('কপি হয়েছে')">📋 লিংক কপি</button><button class="btn sm g" onclick="cashImport(true)">🔄 বিল আনুন</button></div>
+  <small style="color:var(--mut)">ক্যাশিয়ার এই লিংক ফোনে খুলে "Add to Home Screen" করবে। তার বিক্রি ১৫ সেকেন্ডের মধ্যে এখানে স্টক ও হিসাবে যোগ হয়।${cloudOn()?'':' ⚠️ ক্লাউড সিঙ্ক বন্ধ — চালু না হলে ক্যাশিয়ার কাজ করবে না।'}</small></div>
+  ${C.map((c,i)=>{const S=D.sales.filter(s=>s.cashier===c.user),td=S.filter(s=>s.t>=d0),mo=S.filter(s=>s.t>=m0);
+    return `<div class="card" style="${c.active===false?'opacity:.6':''}"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><span class="pill">${c.active===false?'বন্ধ':'চালু'}</span></div>
+    <small style="color:var(--mut)">আইডি: <b>${esc(c.user)}</b> · পাসওয়ার্ড: <b>${esc(c.pw)}</b></small>
+    <label>ব্রাঞ্চ</label><select class="inp" onchange="cashBr(${i},this.value)">${brs().map(b=>`<option ${b===c.br?'selected':''}>${esc(b)}</option>`).join('')}</select>
+    <div class="tot"><span>আজ</span><span>${bn(td.length)} বিল · ${tk(sum(td,s=>s.total))}</span></div><div class="tot"><span>এই মাস</span><span>${bn(mo.length)} বিল · ${tk(sum(mo,s=>s.total))}</span></div>
+    <div class="row" style="margin-top:8px"><button class="btn sm g" onclick="cashName(${i})">✏️ নাম</button><button class="btn sm g" onclick="cashPw(${i})">🔑 পাসওয়ার্ড</button><button class="btn sm ${c.active===false?'ok':'g'}" onclick="cashTog(${i})">${c.active===false?'চালু করুন':'বন্ধ করুন'}</button></div></div>`}).join('')||'<div class="empty">এখনো কোনো ক্যাশিয়ার নেই</div>'}
+  ${C.length<10?`<div class="card"><b>➕ নতুন ক্যাশিয়ার (${bn(C.length)}/১০)</b>
+  <label>নাম</label><input class="inp" id="cs_n"><label>লগইন আইডি (ইংরেজি, যেমন rahim1)</label><input class="inp" id="cs_u" autocapitalize="none"><label>পাসওয়ার্ড (কমপক্ষে ৬)</label><input class="inp" id="cs_p"><label>ব্রাঞ্চ</label><select class="inp" id="cs_b">${brs().map(b=>`<option>${esc(b)}</option>`).join('')}</select>
+  <button class="btn ok" style="margin-top:8px" onclick="cashAdd()">✓ তৈরি করুন</button></div>`:''}`;
+}
+
 async function importCloudOrders(manual){
   if(!cloudOn()||!logged)return;
   try{
@@ -334,7 +438,7 @@ async function importCloudOrders(manual){
     setSync('err');if(manual)toast('❌ অর্ডার আনা যায়নি: '+e.message);
   }
 }
-function startPoll(){if(!cloudOn()||_poll)return;importCloudOrders();_poll=setInterval(importCloudOrders,15000)}
+function startPoll(){if(!cloudOn()||_poll)return;importCloudOrders();_poll=setInterval(()=>{importCloudOrders();cashImport()},15000);cashImport()}
 function stopPoll(){clearInterval(_poll);_poll=null}
 async function syncDown(){
   try{
@@ -726,6 +830,7 @@ function migrate(){
   d.purchases.forEach(x=>{if(typeof x.vat==='string'){x.vno=x.vat;x.vat=r2((x.items||[]).reduce((a,i)=>a+(+i.vat||0),0))}});
   d.jseq=d.jseq||0;d.pseq=d.pseq||0;
   d.st=Object.assign({seq:{},closed:[],docs:[],xf:[],po:[],cats:[],bprice:{},bbc:{},plog:[],reps:[],targets:{},eod:[],open:{status:'draft',lines:{}},sheets:[]},d.st||{});
+  d.cash=d.cash||[];d.cashLast=d.cashLast||{};
   if(!d.st.br5&&d.cfg&&d.cfg.cc){d.st.br5=1;['Branch 1','Branch 2','Branch 3','Branch 4','Branch 5'].forEach(n=>{if(!d.cfg.cc.includes(n))d.cfg.cc.push(n)})}
   d.nseq=Object.assign({dn:0,cn:0},d.nseq||{});d.vseq=Object.assign({rv:0,pv:0,rrv:0,rpv:0},d.vseq||{});
   d.products.forEach(p=>{if(!p.tax)p.tax=d.cfg.defTax;if(p.sub===undefined)p.sub=SUBMAP[p.name]||''});
@@ -827,8 +932,7 @@ const MOD=[
   ['ssv','Sales Supervisors','সেলস সুপারভাইজার'],
   ['tgt','Annual Sales Target for reps by Items','রেপের আইটেম ধরে বার্ষিক টার্গেট'],
   ['-','Transactions','লেনদেন'],
-  ['ws','Sales','হোলসেল / ইনভয়েস বিক্রি (দোকানের বিক্রি POS তে)'],
-  ['pos','Sales (POS)','বারকোড স্ক্যান করে খুচরা বিক্রি'],
+  ['ws','Sales','হোলসেল / ইনভয়েস বিক্রি (খুচরা বিক্রি আলাদা ক্যাশিয়ার অ্যাপে)'],
   ['wr','Hole Sales Return - Credit Note','বিক্রি ফেরত / ক্রেডিট নোট'],
   ['stock','Purchase Receipt','ক্রয় ও স্টক এন্ট্রি'],
   ['st_dn','Purchase Return','সাপ্লায়ারকে ফেরত (ডেবিট নোট)'],
@@ -885,10 +989,11 @@ const MOD=[
  {k:'BC',t:'Barcode Printing - BC',b:'বারকোড লেবেল প্রিন্ট (৩৭×২০ মিমি)',ico:'🏷️',items:[
   ['bcp','Barcode Printing for an Item','নাম/নম্বর দিয়ে খুঁজে বারকোড লেবেল প্রিন্ট — কয়টায় বারকোড আছে, বাকিটা ছাপুন']]},
  {k:'OO',t:'Online Orders - OO',b:'অনলাইন অর্ডার কনফার্ম ও পেমেন্ট যাচাই',ico:'🛒',items:[
-  ['ord','Online Orders','কাস্টমারের অনলাইন অর্ডার — পেমেন্ট যাচাই করে কনফার্ম করুন']]}
+  ['ord','Online Orders','কাস্টমারের অনলাইন অর্ডার — পেমেন্ট যাচাই করে কনফার্ম করুন']]},
+ {k:'CS',t:'Cashiers - CS',b:'ক্যাশিয়ার অ্যাকাউন্ট (১–১০), পাসওয়ার্ড ও বিক্রি',ico:'🧑‍💼',items:[['cash','Cashier Accounts','ক্যাশিয়ার তৈরি, পাসওয়ার্ড, ব্রাঞ্চ ও বিক্রির হিসাব']]}
 ];
 const NAV=MOD.map(m=>[m.k,m.t,m.items.map(i=>[i[0],i[1]])]);
-const modOf=t=>MOD.find(m=>m.items.some(i=>i[0]===t&&i[0]!=='-'))||null;
+const modOf=t=>MOD.find(m=>m.items.some(i=>i[0]===t&&i[0]!=='-'))||(t==='pos'?MOD.find(m=>m.k==='ST'):null);
 const NAVH=[];
 function goTab(t){
   if(t!==tab){NAVH.push(tab);if(NAVH.length>40)NAVH.shift();try{history.pushState({t},'')}catch(e){}}
@@ -2343,7 +2448,7 @@ function vWS(){
   `<div class="card"><div class="row"><div><label style="margin-top:0">কাস্টমার *</label>${hin('ws','cust','নাম')}</div><div><label style="margin-top:0">ফোন</label>${hin('ws','phone','ফোন')}</div></div>
   <div class="row"><div><label>সেলস রেপ</label>${hsel('ws','rep',[['','— নেই —'],...D.st.reps.filter(r=>r.type==='rep').map(r=>[r.name,r.name])],'')}</div><div><label>ব্রাঞ্চ</label>${hsel('ws','branch',brs(),MAIN())}</div></div></div>`+lbView('ws',{price:true})+
   `<div class="card"><div class="row"><div><label style="margin-top:0">ডিসকাউন্ট ৳</label>${hin('ws','disc','0','number')}</div><div><label style="margin-top:0">পেমেন্ট</label>${hsel('ws','method',PAYM,'cash')}</div></div><div class="tot b"><span>মোট</span><span>${tk(tot-d)}</span></div>
-  <button class="btn ok" style="margin-top:8px" onclick="wsSave()">✓ বিক্রি সম্পন্ন করুন</button><button class="btn g" style="margin-top:8px" onclick="LB.ws={lines:[]};H.ws={};render()">নতুন করে শুরু</button><button class="btn g" style="margin-top:8px" onclick="goTab('pos')">🧾 Retail Sales (POS) এ যান</button></div>
+  <button class="btn ok" style="margin-top:8px" onclick="wsSave()">✓ বিক্রি সম্পন্ন করুন</button><button class="btn g" style="margin-top:8px" onclick="LB.ws={lines:[]};H.ws={};render()">নতুন করে শুরু</button></div>
   <div class="card"><b>সাম্প্রতিক পাইকারি বিল</b>${T(['বিল','কাস্টমার','মোট',''],rec.map(s=>[s.id+lockI(s),esc(s.cust),tk(s.total),`<button class="ib" onclick="receipt('${s.id}')">🖨️</button>`+docBtns('sale',s.id)]))}</div>`;
 }
 function wsSave(){
@@ -2629,7 +2734,7 @@ const RV={};
 /* ----- screen registry ----- */
 const VIEWS={dash:vDash,pos:vPOS,stock:vPR,prod:vProd,ord:vOrd,sup:vSup,je:vJE,rv:vRV,rrv:vRRV,pv:vPV,rpv:vRPV,ob:vOB,jsum:vJSum,tb:vTB,acc:vAcc,fy:vFY,cfg:vCfg,dn:vDN,cn:vCN,post:vPost,unA:vUnA,unE:vUnE,unI:vUnI,vrep:vVRep,ana:vAna,off:vOff,set:vSet};
 MOD.forEach(m=>{VIEWS['m_'+m.k]=()=>vMod(m.k)});VIEWS.home=vHome;
-Object.assign(VIEWS,{bcp:vBCP,cats:vCats,bid:vBID,bpr:vBPR,srp:vSR,srs:vSRp,ssv:vSSv,tgt:vTgt,ws:vWS,wr:vWR,st_dn:vDN,xt:vXT,rb:vRB,ia:vIA,dw:vDW,pc:vPC,po:vPO,lk:()=>vLK(true),ul:()=>vLK(false),cp:()=>vCP(true),op:()=>vCP(false),st_post:vPost,st_unpost:vUnH,eod:vEOD,os_e:vOS,os_p:vOSP,os_post:vOSPo,os_un:vOSU,ssp:vPSP,ssq:vPSS,iq_ib:vIB,iq_bc:vIBC,iq_s:vSI,iq_t:vTI,iq_w:vWI,r_inv:vPInv},RV);
+Object.assign(VIEWS,{cash:vCash,bcp:vBCP,cats:vCats,bid:vBID,bpr:vBPR,srp:vSR,srs:vSRp,ssv:vSSv,tgt:vTgt,ws:vWS,wr:vWR,st_dn:vDN,xt:vXT,rb:vRB,ia:vIA,dw:vDW,pc:vPC,po:vPO,lk:()=>vLK(true),ul:()=>vLK(false),cp:()=>vCP(true),op:()=>vCP(false),st_post:vPost,st_unpost:vUnH,eod:vEOD,os_e:vOS,os_p:vOSP,os_post:vOSPo,os_un:vOSU,ssp:vPSP,ssq:vPSS,iq_ib:vIB,iq_bc:vIBC,iq_s:vSI,iq_t:vTI,iq_w:vWI,r_inv:vPInv},RV);
 
 /* ===== SETTINGS ===== */
 function vSet(){
