@@ -343,6 +343,34 @@ function cashPost(c,k,x){
   postSale(s,{cc:c.br||MAIN()});D.sales.unshift(s);return true;
 }
 let _cashBusy=false;
+async function cashBackfill(manual){
+  if(!cloudOn()||!logged)return;
+  const need=(D.cashLog||[]).filter(l=>!(l.li&&l.li.length));
+  if(!need.length){if(manual)toast('সব ক্যানসেলে পণ্য আছে');return}
+  try{
+    const tok=await authTok();let fixed=0;
+    for(const c of D.cash){
+      if(!c.uid)continue;
+      const all=await dbGet('cashierSales/'+c.uid,tok)||{};
+      const by={};Object.keys(all).forEach(k=>{by[k]=all[k]});
+      const arr=x=>Array.isArray(x)?x.filter(Boolean):Object.values(x||{});
+      Object.keys(all).forEach(k=>{
+        const x=all[k];if(!x||!x.void)return;
+        const orig=by[x.void];
+        if(!x.ret){
+          const l=need.find(z=>!(z.li&&z.li.length)&&!z.part&&z.no===x.no&&z.cname===c.name);
+          if(l){l.li=arr(x.items).map(i=>({n:String(i.n||(P(+i.pid)||{}).name||''),c:(P(+i.pid)||{}).code||'',q:+i.qty,v:r2((+i.qty||0)*(+i.price||0))}));if(l.li.length){l.total=l.total||x.total;fixed++}}
+        }else{
+          const l=need.find(z=>!(z.li&&z.li.length)&&z.part&&z.no===x.no&&z.cname===c.name&&Math.abs((+z.at||z.t)-(+x.at||0))<120000);
+          if(l){const oi=orig?arr(orig.items):[];
+            l.li=arr(x.ret).map(r=>{const p=P(+r.pid)||{},o=oi.find(i=>+i.pid===+r.pid)||{};return{n:p.name||o.n||'',c:p.code||'',q:+r.qty,v:r2((+r.qty||0)*(+o.price||0))}});if(l.li.length)fixed++}
+        }
+      });
+    }
+    if(fixed){sv();if(tab==='cash')render();toast('✅ '+bn(fixed)+'টি পুরনো ক্যানসেলে পণ্য যোগ হয়েছে')}
+    else if(manual)toast('পুরনো রেকর্ড পাওয়া যায়নি')
+  }catch(e){if(manual)toast('❌ '+e.message)}
+}
 function cnNew(){D.cashCn=(D.cashCn||0)+1;return 'CN'+pad(D.cashCn)}
 function cnFix(){(D.cashLog||[]).slice().reverse().forEach(l=>{if(!l.cn)l.cn=cnNew()})}
 function cashCnPrint(i){
@@ -496,7 +524,7 @@ function vCash(){
   <div class="card"><b>🧾 ক্যাশিয়ারের বিল ও ইনভয়েস</b>
   <div class="row"><div><label>ক্যাশিয়ার</label><select class="inp" id="rp_c" onchange="CSF=this.value;render()"><option value="">সবাই</option>${C.map(c=>`<option value="${esc(c.user)}" ${CSF===c.user?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div><div><label>সময়</label><select class="inp" id="rp_p" onchange="CSP=this.value;render()">${[['td','আজ'],['yd','গতকাল'],['mo','এই মাস'],['all','সব']].map(o=>`<option value="${o[0]}" ${CSP===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></div></div>
   ${(()=>{const B=D.sales.filter(x=>x.cashier&&(!CSF||x.cashier===CSF)&&cashFilt(x.t));return `<div class="tot" style="margin-top:6px"><span>${bn(B.length)}টি বিল</span><b>${tk(sum(B,x=>x.total))}</b></div>`+(B.slice(0,100).map(x=>`<div class="ci"><div class="m"><b>#${esc(x.id)}</b> <small style="color:var(--mut)">${esc(x.cno||'')}</small><br><small style="color:var(--mut)">${fdt(x.t)} · ${esc(x.cname||'')} · ${esc(MET[x.method]||x.method)}</small></div><b>${tk(x.total)}</b><button class="btn sm" style="width:auto" onclick="docPrint('sale','${esc(x.id)}')">🖨️ ইনভয়েস</button></div>`).join('')||'<div class="empty" style="padding:12px">এই সময়ে কোনো বিল নেই</div>')})()}
-  <details style="margin-top:8px"><summary style="color:var(--mut)">সারসংক্ষেপ রিপোর্ট (সব বিল একসাথে)</summary><button class="btn g sm" style="margin-top:6px" onclick="cashRepSales()">🧾 বিক্রয় রিপোর্ট</button> <button class="btn g sm" onclick="cashRepCancel()">❌ ক্যানসেল রিপোর্ট</button></details></div>
+  <details style="margin-top:8px"><summary style="color:var(--mut)">সারসংক্ষেপ রিপোর্ট / পুরনো রেকর্ড</summary><button class="btn g sm" style="margin-top:6px" onclick="cashBackfill(true)">♻️ পুরনো ক্যানসেলের পণ্য আনুন</button> <button class="btn g sm" style="margin-top:6px" onclick="cashRepSales()">🧾 বিক্রয় রিপোর্ট</button> <button class="btn g sm" onclick="cashRepCancel()">❌ ক্যানসেল রিপোর্ট</button></details></div>
   ${C.map((c,i)=>{const S=D.sales.filter(s=>s.cashier===c.user),td=S.filter(s=>s.t>=d0),mo=S.filter(s=>s.t>=m0);
     return `<div class="card" style="${c.active===false?'opacity:.6':''}"><div class="row" style="justify-content:space-between"><b>${esc(c.name)}</b><span class="pill">${c.active===false?'বন্ধ':'চালু'}</span></div>
     <small style="color:var(--mut)">আইডি: <b>${esc(c.user)}</b> · পাসওয়ার্ড: <b>${esc(c.pw)}</b></small>
@@ -533,7 +561,7 @@ async function importCloudOrders(manual){
     setSync('err');if(manual)toast('❌ অর্ডার আনা যায়নি: '+e.message);
   }
 }
-function startPoll(){if(!cloudOn()||_poll)return;importCloudOrders();_poll=setInterval(()=>{importCloudOrders();cashImport()},15000);cashImport()}
+function startPoll(){if(!cloudOn()||_poll)return;importCloudOrders();_poll=setInterval(()=>{importCloudOrders();cashImport()},15000);cashImport().then(()=>cashBackfill())}
 function stopPoll(){clearInterval(_poll);_poll=null}
 async function syncDown(){
   try{
